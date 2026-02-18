@@ -1,12 +1,49 @@
-@import './base.css';
+@import "tailwindcss";
 
-#app {
-  width: min(1100px, calc(100vw - 2rem));
-  margin: 0 auto;
-  padding: 1rem 0 2rem;
-  font-weight: 400;
+@theme {
+  --font-sans: Inter, -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto,
+    Oxygen, Ubuntu, Cantarell, 'Fira Sans', 'Droid Sans', 'Helvetica Neue',
+    sans-serif;
+  --font-mono: ui-monospace, Menlo, Monaco, Consolas, 'Liberation Mono',
+    'Courier New', monospace;
+
+  --color-surface: #ffffff;
+  --color-surface-secondary: #f9fafb;
+  --color-surface-tertiary: #f3f4f6;
+  --color-border-default: #e5e7eb;
+  --color-border-strong: #d1d5db;
+  --color-text-primary: #111827;
+  --color-text-secondary: #6b7280;
+  --color-text-tertiary: #9ca3af;
+  --color-accent: #2563eb;
+  --color-accent-hover: #1d4ed8;
+  --color-success: #059669;
+  --color-warning: #d97706;
+  --color-danger: #dc2626;
+  --color-user-bubble: #eff6ff;
+  --color-user-border: #bfdbfe;
+  --color-assistant-bubble: #ffffff;
+  --color-system-bubble: #f9fafb;
 }
 
-code {
-  font-family: ui-monospace, Menlo, Monaco, Consolas, 'Liberation Mono', 'Courier New', monospace;
+@variant dark {
+  @theme {
+    --color-surface: #0f172a;
+    --color-surface-secondary: #1e293b;
+    --color-surface-tertiary: #334155;
+    --color-border-default: #334155;
+    --color-border-strong: #475569;
+    --color-text-primary: #f1f5f9;
+    --color-text-secondary: #94a3b8;
+    --color-text-tertiary: #64748b;
+    --color-accent: #3b82f6;
+    --color-accent-hover: #2563eb;
+    --color-success: #10b981;
+    --color-warning: #f59e0b;
+    --color-danger: #ef4444;
+    --color-user-bubble: #1e3a5f;
+    --color-user-border: #1e40af;
+    --color-assistant-bubble: #1e293b;
+    --color-system-bubble: #1e293b;
+  }
 }

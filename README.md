@@ -51,7 +51,13 @@ The frontend resolves the bridge WebSocket URL automatically with this priority:
 3. `ws(s)://<current-host>/bridge` from browser location
 4. `ws://127.0.0.1:8787/bridge` (default)
 
-When using `npm run dev:frontend`, Vite proxies `/bridge` websocket traffic to `ws://127.0.0.1:8787`, so priority 3 works in local development as well.
+When using `npm run dev:frontend`, Vite proxies `/bridge` websocket traffic to `ws://127.0.0.1:${BRIDGE_PORT:-8787}`, so priority 3 works in local development as well.
+
+If port `8787` is already in use, start with another bridge port:
+
+```sh
+BRIDGE_PORT=8788 npm run dev
+```
 
 ### Type-Check, Compile and Minify for Production
 

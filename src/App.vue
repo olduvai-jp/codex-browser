@@ -42,6 +42,17 @@ type ModelOption = {
   label: string
 }
 
+type UserGuidanceTone = 'info' | 'warn' | 'error'
+type UserGuidance = {
+  tone: UserGuidanceTone
+  text: string
+}
+
+type ApprovalMethodExplanation = {
+  intent: string
+  impact: string
+}
+
 const DEFAULT_WS_URL = 'ws://127.0.0.1:8787/bridge'
 
 const wsUrl = ref(DEFAULT_WS_URL)
@@ -58,13 +69,24 @@ const threadHistory = ref<ThreadHistoryEntry[]>([])
 const modelOptions = ref<ModelOption[]>([])
 const selectedModelId = ref('')
 const configSnapshot = ref<unknown | null>(null)
+const quickStartInProgress = ref(false)
+const userGuidance = ref<UserGuidance | null>(null)
 
 const messages = ref<UiMessage[]>([])
 const logs = ref<LogEntry[]>([])
 const approvals = ref<ApprovalRequest[]>([])
+const appStartedAtMs = Date.now()
+const firstSendDurationMs = ref<number | null>(null)
+const historyResumeAttemptCount = ref(0)
+const historyResumeSuccessCount = ref(0)
+const approvalDecisionCount = ref(0)
+const approvalDecisionTotalMs = ref(0)
+const turnStartCount = ref(0)
+const turnStartWithModelCount = ref(0)
 
 const client = ref<BridgeRpcClient | null>(null)
 const assistantMessageIndexByItemId = new Map<string, number>()
+const approvalRequestedAtMsById = new Map<string, number>()
 
 let uiMessageSequence = 1
 let logSequence = 1
@@ -98,7 +120,109 @@ const canReadSelectedHistoryThread = computed(
     selectedHistoryThreadId.value.trim().length > 0 &&
     !isTurnActive.value,
 )
+const canQuickStartConversation = computed(
+  () => connectionState.value !== 'connecting' && !quickStartInProgress.value && !isTurnActive.value,
+)
 const currentApproval = computed(() => approvals.value[0] ?? null)
+const historyResumeSuccessRate = computed(() =>
+  historyResumeAttemptCount.value === 0
+    ? 0
+    : (historyResumeSuccessCount.value / historyResumeAttemptCount.value) * 100,
+)
+const approvalDecisionAverageMs = computed(() =>
+  approvalDecisionCount.value === 0 ? 0 : approvalDecisionTotalMs.value / approvalDecisionCount.value,
+)
+const modelSelectionRate = computed(() =>
+  turnStartCount.value === 0 ? 0 : (turnStartWithModelCount.value / turnStartCount.value) * 100,
+)
+const firstSendDurationLabel = computed(() =>
+  firstSendDurationMs.value === null ? '未計測' : formatDurationMs(firstSendDurationMs.value),
+)
+const historyResumeRateLabel = computed(() => formatRate(historyResumeSuccessRate.value))
+const approvalDecisionAverageLabel = computed(() =>
+  approvalDecisionCount.value === 0 ? '未計測' : formatDurationMs(approvalDecisionAverageMs.value),
+)
+const modelSelectionRateLabel = computed(() => formatRate(modelSelectionRate.value))
+const sendBlockedReason = computed(() => {
+  if (!isConnected.value) {
+    return 'サーバーに接続されていません。'
+  }
+  if (!initialized.value) {
+    return '初期化が完了していません。'
+  }
+  if (activeThreadId.value.trim().length === 0) {
+    return '先に会話を開始または再開してください。'
+  }
+  if (isTurnActive.value) {
+    return '応答生成中は新しいメッセージを送信できません。'
+  }
+  if (messageInput.value.trim().length === 0) {
+    return 'メッセージを入力してください。'
+  }
+  return ''
+})
+const sendStateHint = computed(() =>
+  canSendMessage.value ? '送信できます。' : `送信できません: ${sendBlockedReason.value}`,
+)
+const currentApprovalExplanation = computed<ApprovalMethodExplanation | null>(() => {
+  if (!currentApproval.value) {
+    return null
+  }
+  return describeApprovalMethod(currentApproval.value.method)
+})
+
+function setUserGuidance(tone: UserGuidanceTone, text: string): void {
+  userGuidance.value = {
+    tone,
+    text,
+  }
+}
+
+function clearUserGuidance(): void {
+  userGuidance.value = null
+}
+
+function describeApprovalMethod(method: string): ApprovalMethodExplanation {
+  if (method.includes('commandExecution')) {
+    return {
+      intent: 'この承認はコマンド実行のためのものです。',
+      impact: '許可すると端末コマンドが実行され、ファイル変更や外部アクセスが発生する可能性があります。',
+    }
+  }
+
+  if (method.includes('fileChange')) {
+    return {
+      intent: 'この承認はファイル変更のためのものです。',
+      impact: '許可するとファイルの作成・更新・削除が行われる可能性があります。',
+    }
+  }
+
+  if (method.includes('tool/requestUserInput')) {
+    return {
+      intent: 'この承認は追加入力の要求です。',
+      impact: '許可すると追加の質問が表示され、あなたの入力内容が処理に使われます。',
+    }
+  }
+
+  if (method.includes('tool/call')) {
+    return {
+      intent: 'この承認はツール呼び出しのためのものです。',
+      impact: '許可すると外部ツールが実行され、データ取得や副作用が発生する可能性があります。',
+    }
+  }
+
+  if (method.includes('tool/')) {
+    return {
+      intent: 'この承認はツール操作のためのものです。',
+      impact: '許可するとツール処理が実行され、操作結果が会話に反映されます。',
+    }
+  }
+
+  return {
+    intent: 'この承認は処理の続行可否を確認するためのものです。',
+    impact: '許可すると要求された処理が続行されます。拒否またはキャンセルすると中断されます。',
+  }
+}
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null
@@ -351,6 +475,31 @@ function stringifyDetails(value: unknown): string {
   }
 }
 
+function formatHistoryUpdatedAt(value?: string): string {
+  if (!value) {
+    return '-'
+  }
+
+  const parsed = new Date(value)
+  if (Number.isNaN(parsed.getTime())) {
+    return value
+  }
+
+  return parsed.toLocaleString()
+}
+
+function formatDurationMs(value: number): string {
+  return `${Math.round(value)} ms`
+}
+
+function formatRate(value: number): string {
+  return `${value.toFixed(1)}%`
+}
+
+function makeApprovalMetricKey(id: JsonRpcId): string {
+  return `${typeof id}:${String(id)}`
+}
+
 function makeUiMessageId(prefix: string): string {
   const id = `${prefix}-${uiMessageSequence}`
   uiMessageSequence += 1
@@ -564,6 +713,7 @@ function handleServerRequest(id: JsonRpcId, method: string, params: unknown): vo
   }
 
   approvals.value.push(approvalRequest)
+  approvalRequestedAtMsById.set(makeApprovalMetricKey(approvalRequest.id), Date.now())
   pushLog('rpc', 'info', `Approval request queued: ${approvalRequest.method}`, params)
 }
 
@@ -683,6 +833,7 @@ function clearClientState(): void {
   initialized.value = false
   userAgent.value = ''
   approvals.value = []
+  approvalRequestedAtMsById.clear()
   connectionState.value = 'disconnected'
 }
 
@@ -726,9 +877,14 @@ async function connect(): Promise<void> {
     }
     initialized.value = true
     pushLog('rpc', 'info', 'initialize completed', initializeResult)
+    clearUserGuidance()
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error)
     pushLog('bridge', 'error', `Failed to connect/initialize: ${message}`)
+    setUserGuidance(
+      'error',
+      `接続または初期化に失敗しました。接続先とサーバー状態を確認して再試行してください。詳細: ${message}`,
+    )
     nextClient.disconnect()
     client.value = null
     clearClientState()
@@ -745,6 +901,58 @@ function disconnect(resetThread = true): void {
     resumeThreadId.value = ''
     selectedHistoryThreadId.value = ''
     resetConversation()
+  }
+}
+
+async function quickStartConversation(): Promise<void> {
+  if (!canQuickStartConversation.value) {
+    return
+  }
+
+  quickStartInProgress.value = true
+
+  try {
+    if (!client.value || !isConnected.value || !initialized.value) {
+      await connect()
+    }
+
+    if (!client.value || !isConnected.value || !initialized.value) {
+      pushLog('rpc', 'warn', 'Quick start cancelled: connection is not ready.')
+      setUserGuidance('warn', '会話の準備を開始できませんでした。まず接続状態を確認してください。')
+      return
+    }
+
+    await loadThreadHistory()
+
+    const preferredThreadId =
+      selectedHistoryThreadId.value.trim().length > 0
+        ? selectedHistoryThreadId.value.trim()
+        : (threadHistory.value[0]?.id ?? '')
+
+    if (preferredThreadId.length > 0) {
+      await readThread(preferredThreadId)
+    }
+
+    if (activeThreadId.value.trim().length === 0) {
+      await startThread()
+    }
+
+    if (activeThreadId.value.trim().length > 0) {
+      pushLog('rpc', 'info', `Quick start ready: ${activeThreadId.value}`)
+      clearUserGuidance()
+    } else {
+      pushLog('rpc', 'warn', 'Quick start failed to prepare a conversation.')
+      setUserGuidance('warn', '会話の準備に失敗しました。履歴の読み込みまたは新規会話作成を手動で試してください。')
+    }
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error)
+    pushLog('rpc', 'error', `quick start failed: ${message}`)
+    setUserGuidance(
+      'error',
+      `会話の準備中にエラーが発生しました。通信状態を確認して再試行してください。詳細: ${message}`,
+    )
+  } finally {
+    quickStartInProgress.value = false
   }
 }
 
@@ -767,12 +975,18 @@ async function startThread(): Promise<void> {
       activeThreadId.value = nextThreadId
       resumeThreadId.value = nextThreadId
       pushLog('rpc', 'info', `thread/start completed: ${nextThreadId}`, response)
+      clearUserGuidance()
     } else {
       pushLog('rpc', 'warn', 'thread/start response missing thread.id', response)
+      setUserGuidance('warn', '会話の作成結果を確認できませんでした。ログを確認して再試行してください。')
     }
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error)
     pushLog('rpc', 'error', `thread/start failed: ${message}`)
+    setUserGuidance(
+      'error',
+      `新しい会話の作成に失敗しました。接続を確認してから再実行してください。詳細: ${message}`,
+    )
   }
 }
 
@@ -813,6 +1027,7 @@ async function readThread(threadId?: string): Promise<void> {
   }
 
   try {
+    historyResumeAttemptCount.value += 1
     const response = await client.value.request('thread/read', {
       threadId: resolvedThreadId,
       id: resolvedThreadId,
@@ -825,6 +1040,7 @@ async function readThread(threadId?: string): Promise<void> {
 
     const hydratedThreadId = hydrateFromThreadSnapshot(thread, resolvedThreadId)
     selectedHistoryThreadId.value = hydratedThreadId ?? resolvedThreadId
+    historyResumeSuccessCount.value += 1
     pushLog('rpc', 'info', `thread/read completed: ${hydratedThreadId ?? resolvedThreadId}`, {
       turns: Array.isArray(thread.turns) ? thread.turns.length : 0,
     })
@@ -844,6 +1060,7 @@ async function resumeThread(): Promise<void> {
   const threadId = resumeThreadId.value.trim()
 
   try {
+    historyResumeAttemptCount.value += 1
     const response = await client.value.request('thread/resume', {
       threadId,
     })
@@ -852,6 +1069,7 @@ async function resumeThread(): Promise<void> {
       isRecord(response) && isRecord(response.thread) ? response.thread : extractThreadFromReadResult(response)
     if (thread) {
       const hydratedThreadId = hydrateFromThreadSnapshot(thread, threadId)
+      historyResumeSuccessCount.value += 1
       pushLog('rpc', 'info', `thread/resume completed: ${hydratedThreadId ?? threadId}`, {
         turns: Array.isArray(thread.turns) ? thread.turns.length : 0,
       })
@@ -883,6 +1101,9 @@ async function sendTurn(): Promise<void> {
   turnStatus.value = 'inProgress'
 
   try {
+    if (firstSendDurationMs.value === null) {
+      firstSendDurationMs.value = Math.max(0, Date.now() - appStartedAtMs)
+    }
     const payload: Record<string, unknown> = {
       threadId: activeThreadId.value,
       input: [
@@ -894,7 +1115,9 @@ async function sendTurn(): Promise<void> {
       ],
     }
     const modelId = selectedModelId.value.trim()
+    turnStartCount.value += 1
     if (modelId.length > 0) {
+      turnStartWithModelCount.value += 1
       payload.model = modelId
     }
 
@@ -903,14 +1126,20 @@ async function sendTurn(): Promise<void> {
     if (isRecord(response) && isRecord(response.turn) && typeof response.turn.id === 'string') {
       currentTurnId.value = response.turn.id
       pushLog('rpc', 'info', `turn/start accepted: ${response.turn.id}`)
+      clearUserGuidance()
       return
     }
 
     pushLog('rpc', 'warn', 'turn/start response missing turn.id', response)
+    setUserGuidance('warn', '送信は受け付けられましたが、ターンIDを確認できませんでした。ログを確認してください。')
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error)
     turnStatus.value = 'failed'
     pushLog('rpc', 'error', `turn/start failed: ${message}`)
+    setUserGuidance(
+      'error',
+      `メッセージ送信に失敗しました。しばらく待ってから再送してください。詳細: ${message}`,
+    )
   }
 }
 
@@ -1001,6 +1230,14 @@ function respondToApproval(decision: ApprovalDecision): void {
     return
   }
 
+  const approvalMetricKey = makeApprovalMetricKey(approval.id)
+  const requestedAtMs = approvalRequestedAtMsById.get(approvalMetricKey)
+  approvalRequestedAtMsById.delete(approvalMetricKey)
+  approvalDecisionCount.value += 1
+  if (typeof requestedAtMs === 'number') {
+    approvalDecisionTotalMs.value += Math.max(0, Date.now() - requestedAtMs)
+  }
+
   client.value.respond(approval.id, {
     decision,
   })
@@ -1019,13 +1256,13 @@ onBeforeUnmount(() => {
 
 <template>
   <main class="app-shell">
-    <section class="panel">
-      <h1>Vue Codex Client MVP</h1>
-      <p class="subtitle">Phase 3 Cycle 1: operational controls (history + interrupt + model + config)</p>
+    <section class="panel launch-panel">
+      <h1>会話アシスタント</h1>
+      <p class="subtitle">接続後に「会話を始める」を押すだけで、前回の続きか新規会話を準備できます。</p>
 
       <div class="row wrap">
         <label class="field grow">
-          <span>Bridge WebSocket URL</span>
+          <span>接続先 WebSocket</span>
           <input
             v-model="wsUrl"
             type="text"
@@ -1034,166 +1271,284 @@ onBeforeUnmount(() => {
           />
         </label>
 
-        <button v-if="!isConnected" class="btn" :disabled="connectionState === 'connecting'" @click="connect">
-          {{ connectionState === 'connecting' ? 'Connecting...' : 'Connect' }}
+        <button
+          v-if="!isConnected"
+          class="btn"
+          data-testid="connect-button"
+          :disabled="connectionState === 'connecting'"
+          @click="connect"
+        >
+          {{ connectionState === 'connecting' ? '接続中...' : '接続する' }}
         </button>
-        <button v-else class="btn danger" @click="disconnect()">Disconnect</button>
+        <button v-else class="btn danger" data-testid="disconnect-button" @click="disconnect()">切断する</button>
+        <button
+          class="btn accent"
+          data-testid="quick-start-button"
+          :disabled="!canQuickStartConversation"
+          @click="quickStartConversation"
+        >
+          {{ quickStartInProgress ? '準備中...' : '会話を始める' }}
+        </button>
       </div>
 
       <div class="status-grid">
-        <p><strong>Connection:</strong> {{ connectionState }}</p>
-        <p><strong>Initialized:</strong> {{ initialized ? 'yes' : 'no' }}</p>
-        <p><strong>User Agent:</strong> {{ userAgent || '-' }}</p>
-        <p><strong>Thread:</strong> <code>{{ activeThreadId || '-' }}</code></p>
-        <p><strong>Turn:</strong> <code>{{ currentTurnId || '-' }}</code></p>
-        <p><strong>Turn Status:</strong> {{ turnStatus }}</p>
-        <p><strong>Model:</strong> <code>{{ selectedModelId || '(server default)' }}</code></p>
+        <p><strong>接続状態:</strong> {{ connectionState }}</p>
+        <p><strong>初期化:</strong> {{ initialized ? '完了' : '未完了' }}</p>
+        <p><strong>ユーザーエージェント:</strong> {{ userAgent || '-' }}</p>
+        <p><strong>会話 ID:</strong> <code>{{ activeThreadId || '-' }}</code></p>
+        <p><strong>ターン ID:</strong> <code>{{ currentTurnId || '-' }}</code></p>
+        <p><strong>応答状態:</strong> {{ turnStatus }}</p>
+        <p><strong>利用モデル:</strong> <code>{{ selectedModelId || '(server default)' }}</code></p>
       </div>
+      <p
+        v-if="userGuidance"
+        class="user-guidance"
+        :class="`tone-${userGuidance.tone}`"
+        data-testid="user-guidance"
+      >
+        {{ userGuidance.text }}
+      </p>
     </section>
 
-    <section class="panel">
-      <h2>Thread Control</h2>
-      <div class="row wrap">
-        <button class="btn" :disabled="!canStartThread" @click="startThread">Start New Thread</button>
+    <div class="chat-layout">
+      <section class="panel conversation-panel">
+        <h2>会話</h2>
 
-        <label class="field grow">
-          <span>Resume Thread ID</span>
-          <input v-model="resumeThreadId" type="text" placeholder="thread_xxx" />
-        </label>
+        <div class="messages" role="log" aria-live="polite">
+          <p v-if="messages.length === 0" class="empty">まだメッセージはありません。</p>
 
-        <button class="btn" :disabled="!canResumeThread" @click="resumeThread">Resume</button>
-      </div>
-    </section>
+          <article
+            v-for="entry in messages"
+            :key="entry.id"
+            class="message"
+            :class="[`role-${entry.role}`, { streaming: entry.streaming }]"
+          >
+            <header>
+              <strong>
+                {{
+                  entry.role === 'user'
+                    ? 'あなた'
+                    : entry.role === 'assistant'
+                      ? 'アシスタント'
+                      : 'システム'
+                }}
+              </strong>
+              <small v-if="entry.turnId">ターン: {{ entry.turnId }}</small>
+            </header>
+            <pre>{{ entry.text || (entry.streaming ? '...' : '') }}</pre>
+          </article>
+        </div>
 
-    <section class="panel">
-      <h2>History + Runtime</h2>
-
-      <div class="row wrap">
-        <button class="btn" :disabled="!isConnected || !initialized" @click="loadThreadHistory">
-          Load thread/list
-        </button>
-        <button class="btn" :disabled="!canReadSelectedHistoryThread" @click="readThread()">
-          Restore Selected thread/read
-        </button>
-      </div>
-
-      <div class="history-list">
-        <p v-if="threadHistory.length === 0" class="empty">No thread history loaded.</p>
-        <label v-for="entry in threadHistory" :key="entry.id" class="history-item">
-          <input
-            v-model="selectedHistoryThreadId"
-            type="radio"
-            name="thread-history"
-            :value="entry.id"
-            :disabled="isTurnActive"
+        <form class="composer" @submit.prevent="sendTurn">
+          <textarea
+            v-model="messageInput"
+            rows="3"
+            placeholder="メッセージを入力"
+            :disabled="!isConnected || !initialized || !activeThreadId || isTurnActive"
           />
-          <div class="history-item-main">
-            <p><code>{{ entry.id }}</code></p>
-            <p v-if="entry.title !== entry.id">{{ entry.title }}</p>
-            <small>
-              <span v-if="typeof entry.turnCount === 'number'">turns: {{ entry.turnCount }}</span>
-              <span v-if="entry.updatedAt">{{ entry.updatedAt }}</span>
-            </small>
+          <div class="row wrap composer-actions">
+            <button class="btn" data-testid="send-turn-button" type="submit" :disabled="!canSendMessage">
+              送信
+            </button>
+            <button
+              class="btn warning"
+              data-testid="interrupt-turn-button"
+              type="button"
+              :disabled="!canInterruptTurn"
+              @click="interruptTurn"
+            >
+              応答を中断
+            </button>
           </div>
+          <p class="composer-hint" :class="{ ready: canSendMessage }" data-testid="send-state-hint">
+            {{ sendStateHint }}
+          </p>
+        </form>
+      </section>
+
+      <section class="panel history-panel">
+        <div class="row wrap history-header">
+          <h2>会話履歴</h2>
           <button
             class="btn"
-            type="button"
-            :disabled="!isConnected || !initialized || isTurnActive"
-            @click="readThread(entry.id)"
+            data-testid="history-refresh-button"
+            :disabled="!isConnected || !initialized"
+            @click="loadThreadHistory"
           >
-            Read thread/read
+            履歴を更新
           </button>
-        </label>
-      </div>
+        </div>
 
-      <div class="row wrap runtime-row">
-        <button class="btn" :disabled="!isConnected || !initialized" @click="loadModelList">Load model/list</button>
-        <label class="field grow">
-          <span>Model Selection</span>
-          <select v-model="selectedModelId" data-testid="model-select" :disabled="modelOptions.length === 0">
-            <option value="">(server default)</option>
-            <option v-for="option in modelOptions" :key="option.id" :value="option.id">
-              {{ option.label }}
-            </option>
-          </select>
-        </label>
-      </div>
-
-      <div class="row wrap">
-        <button class="btn" :disabled="!isConnected || !initialized" @click="loadConfig">Load config/read</button>
-      </div>
-      <pre class="config-view">{{ configSnapshot === null ? 'No config/read result yet.' : stringifyDetails(configSnapshot) }}</pre>
-    </section>
-
-    <section class="panel grow-panel">
-      <h2>Conversation</h2>
-
-      <div class="messages" role="log" aria-live="polite">
-        <p v-if="messages.length === 0" class="empty">No messages yet.</p>
-
-        <article
-          v-for="entry in messages"
-          :key="entry.id"
-          class="message"
-          :class="[`role-${entry.role}`, { streaming: entry.streaming }]"
+        <button
+          class="btn history-open-selected"
+          data-testid="history-open-selected-button"
+          :disabled="!canReadSelectedHistoryThread"
+          @click="readThread()"
         >
-          <header>
-            <strong>{{ entry.role }}</strong>
-            <small v-if="entry.turnId">turn: {{ entry.turnId }}</small>
-          </header>
-          <pre>{{ entry.text || (entry.streaming ? '...' : '') }}</pre>
-        </article>
-      </div>
-
-      <div class="row wrap interrupt-row">
-        <button class="btn warning" type="button" :disabled="!canInterruptTurn" @click="interruptTurn">
-          Interrupt turn/interrupt
+          選択した履歴を開く
         </button>
+
+        <div class="history-list">
+          <p v-if="threadHistory.length === 0" class="empty">履歴がまだありません。</p>
+          <label v-for="entry in threadHistory" :key="entry.id" class="history-item">
+            <input
+              v-model="selectedHistoryThreadId"
+              type="radio"
+              name="thread-history"
+              :value="entry.id"
+              :disabled="isTurnActive"
+            />
+            <div class="history-item-main">
+              <p class="history-title">{{ entry.title }}</p>
+              <p class="history-id"><code>{{ entry.id }}</code></p>
+              <small>
+                <span>更新: {{ formatHistoryUpdatedAt(entry.updatedAt) }}</span>
+                <span>ターン数: {{ typeof entry.turnCount === 'number' ? entry.turnCount : '-' }}</span>
+              </small>
+            </div>
+            <button
+              class="btn"
+              type="button"
+              :disabled="!isConnected || !initialized || isTurnActive"
+              @click="readThread(entry.id)"
+            >
+              この履歴を開く
+            </button>
+          </label>
+        </div>
+      </section>
+    </div>
+
+    <details class="panel advanced-panel">
+      <summary>詳細ログと運用操作</summary>
+
+      <div class="advanced-sections">
+        <section class="advanced-section">
+          <h3>会話運用</h3>
+          <div class="row wrap">
+            <button class="btn" data-testid="start-thread-button" :disabled="!canStartThread" @click="startThread">
+              新しい会話を作る
+            </button>
+
+            <label class="field grow">
+              <span>再開する会話 ID</span>
+              <input
+                v-model="resumeThreadId"
+                data-testid="resume-thread-input"
+                type="text"
+                placeholder="thread_xxx"
+              />
+            </label>
+
+            <button class="btn" data-testid="resume-thread-button" :disabled="!canResumeThread" @click="resumeThread">
+              IDで再開
+            </button>
+          </div>
+        </section>
+
+        <section class="advanced-section">
+          <h3>モデルと設定</h3>
+          <div class="row wrap runtime-row">
+            <button
+              class="btn"
+              data-testid="load-model-list-button"
+              :disabled="!isConnected || !initialized"
+              @click="loadModelList"
+            >
+              モデル候補を更新
+            </button>
+            <label class="field grow">
+              <span>利用モデル</span>
+              <select v-model="selectedModelId" data-testid="model-select" :disabled="modelOptions.length === 0">
+                <option value="">(server default)</option>
+                <option v-for="option in modelOptions" :key="option.id" :value="option.id">
+                  {{ option.label }}
+                </option>
+              </select>
+            </label>
+          </div>
+
+          <div class="row wrap">
+            <button
+              class="btn"
+              data-testid="load-config-button"
+              :disabled="!isConnected || !initialized"
+              @click="loadConfig"
+            >
+              設定を読み込む
+            </button>
+          </div>
+          <pre class="config-view">{{ configSnapshot === null ? 'まだ設定情報はありません。' : stringifyDetails(configSnapshot) }}</pre>
+        </section>
+
+        <section class="advanced-section" data-testid="metrics-panel">
+          <h3>計測</h3>
+          <dl class="metrics-list">
+            <div class="metrics-item">
+              <dt>初回送信までの時間</dt>
+              <dd data-testid="metric-first-send">{{ firstSendDurationLabel }}</dd>
+            </div>
+            <div class="metrics-item">
+              <dt>履歴再開成功率</dt>
+              <dd data-testid="metric-history-resume">
+                成功 {{ historyResumeSuccessCount }} / 試行 {{ historyResumeAttemptCount }} ({{ historyResumeRateLabel }})
+              </dd>
+            </div>
+            <div class="metrics-item">
+              <dt>承認判断時間</dt>
+              <dd data-testid="metric-approval-decision">
+                {{ approvalDecisionCount }} 件 / 平均 {{ approvalDecisionAverageLabel }}
+              </dd>
+            </div>
+            <div class="metrics-item">
+              <dt>モデル選択率（turn/start）</dt>
+              <dd data-testid="metric-model-selection">
+                model 指定 {{ turnStartWithModelCount }} / turn/start {{ turnStartCount }} ({{ modelSelectionRateLabel }})
+              </dd>
+            </div>
+          </dl>
+        </section>
+
+        <section class="advanced-section">
+          <h3>ログ</h3>
+          <div class="logs">
+            <p v-if="logs.length === 0" class="empty">ログはまだありません。</p>
+
+            <article v-for="entry in logs" :key="entry.id" class="log-entry" :class="`level-${entry.level}`">
+              <header>
+                <span>{{ entry.timestamp }}</span>
+                <strong>[{{ entry.scope }}]</strong>
+                <strong>{{ entry.level.toUpperCase() }}</strong>
+              </header>
+              <p>{{ entry.message }}</p>
+              <pre v-if="entry.details">{{ entry.details }}</pre>
+            </article>
+          </div>
+        </section>
       </div>
-
-      <form class="composer" @submit.prevent="sendTurn">
-        <textarea
-          v-model="messageInput"
-          rows="3"
-          placeholder="Type your message then send turn/start"
-          :disabled="!isConnected || !initialized || !activeThreadId || isTurnActive"
-        />
-        <button class="btn" type="submit" :disabled="!canSendMessage">Send turn/start</button>
-      </form>
-    </section>
-
-    <section class="panel">
-      <h2>Bridge + RPC Logs</h2>
-      <div class="logs">
-        <p v-if="logs.length === 0" class="empty">No logs yet.</p>
-
-        <article v-for="entry in logs" :key="entry.id" class="log-entry" :class="`level-${entry.level}`">
-          <header>
-            <span>{{ entry.timestamp }}</span>
-            <strong>[{{ entry.scope }}]</strong>
-            <strong>{{ entry.level.toUpperCase() }}</strong>
-          </header>
-          <p>{{ entry.message }}</p>
-          <pre v-if="entry.details">{{ entry.details }}</pre>
-        </article>
-      </div>
-    </section>
+    </details>
 
     <section v-if="currentApproval" class="approval-backdrop">
       <article class="approval-modal">
-        <h3>Approval Required</h3>
+        <h3>確認が必要です</h3>
+        <p class="approval-intent" data-testid="approval-intent">
+          {{ currentApprovalExplanation?.intent }}
+        </p>
+        <p class="approval-impact" data-testid="approval-impact">
+          {{ currentApprovalExplanation?.impact }}
+        </p>
         <p><strong>Method:</strong> <code>{{ currentApproval.method }}</code></p>
         <p><strong>Request ID:</strong> <code>{{ String(currentApproval.id) }}</code></p>
         <pre>{{ stringifyDetails(currentApproval.params) }}</pre>
 
         <div class="row">
-          <button class="btn" @click="respondToApproval('accept')">Accept</button>
-          <button class="btn warning" @click="respondToApproval('decline')">Decline</button>
-          <button class="btn danger" @click="respondToApproval('cancel')">Cancel</button>
+          <button class="btn" @click="respondToApproval('accept')">許可する</button>
+          <button class="btn warning" @click="respondToApproval('decline')">拒否する</button>
+          <button class="btn danger" @click="respondToApproval('cancel')">キャンセル</button>
         </div>
 
         <p v-if="approvals.length > 1" class="queue-hint">
-          {{ approvals.length - 1 }} more approval request(s) queued.
+          残り {{ approvals.length - 1 }} 件の承認リクエストがあります。
         </p>
       </article>
     </section>
@@ -1204,18 +1559,14 @@ onBeforeUnmount(() => {
 .app-shell {
   display: flex;
   flex-direction: column;
-  gap: 1rem;
+  gap: 1.1rem;
 }
 
 .panel {
   border: 1px solid #d1d5db;
-  border-radius: 12px;
+  border-radius: 14px;
   padding: 1rem;
   background: #ffffff;
-}
-
-.grow-panel {
-  min-height: 360px;
 }
 
 h1,
@@ -1227,6 +1578,25 @@ h3 {
 .subtitle {
   margin-top: 0.25rem;
   color: #4b5563;
+}
+
+.user-guidance {
+  margin: 0.75rem 0 0;
+  border-radius: 8px;
+  padding: 0.6rem 0.7rem;
+  border: 1px solid #cbd5e1;
+  background: #f8fafc;
+  color: #1f2937;
+}
+
+.user-guidance.tone-warn {
+  border-color: #f59e0b;
+  background: #fffbeb;
+}
+
+.user-guidance.tone-error {
+  border-color: #dc2626;
+  background: #fef2f2;
 }
 
 .row {
@@ -1275,6 +1645,11 @@ select {
   cursor: pointer;
 }
 
+.btn.accent {
+  background: #2563eb;
+  border-color: #1d4ed8;
+}
+
 .btn:disabled {
   cursor: not-allowed;
   opacity: 0.55;
@@ -1293,7 +1668,33 @@ select {
 .status-grid {
   margin-top: 0.85rem;
   display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(210px, 1fr));
   gap: 0.35rem;
+}
+
+.chat-layout {
+  display: grid;
+  grid-template-columns: minmax(0, 1.7fr) minmax(300px, 1fr);
+  gap: 1rem;
+  align-items: start;
+}
+
+.conversation-panel {
+  min-height: 520px;
+}
+
+.history-panel {
+  min-height: 520px;
+}
+
+.history-header {
+  align-items: center;
+  justify-content: space-between;
+}
+
+.history-open-selected {
+  margin-top: 0.75rem;
+  width: 100%;
 }
 
 .history-list {
@@ -1302,7 +1703,7 @@ select {
   border-radius: 10px;
   background: #f8fafc;
   padding: 0.75rem;
-  max-height: 260px;
+  max-height: 410px;
   overflow: auto;
   display: flex;
   flex-direction: column;
@@ -1324,6 +1725,14 @@ select {
   display: flex;
   flex-direction: column;
   gap: 0.2rem;
+}
+
+.history-title {
+  font-weight: 600;
+}
+
+.history-id {
+  font-size: 0.87rem;
 }
 
 .history-item-main p,
@@ -1361,7 +1770,8 @@ select {
   border-radius: 10px;
   background: #f8fafc;
   padding: 0.75rem;
-  max-height: 360px;
+  min-height: 360px;
+  max-height: 620px;
   overflow: auto;
   display: flex;
   flex-direction: column;
@@ -1415,8 +1825,19 @@ select {
   gap: 0.5rem;
 }
 
-.interrupt-row {
-  margin-top: 0.75rem;
+.composer-actions {
+  justify-content: space-between;
+  align-items: center;
+}
+
+.composer-hint {
+  margin: 0;
+  font-size: 0.9rem;
+  color: #4b5563;
+}
+
+.composer-hint.ready {
+  color: #065f46;
 }
 
 .logs {
@@ -1429,6 +1850,65 @@ select {
   display: flex;
   flex-direction: column;
   gap: 0.55rem;
+}
+
+.advanced-panel {
+  padding-top: 0.7rem;
+}
+
+.advanced-panel summary {
+  cursor: pointer;
+  font-weight: 600;
+  list-style: none;
+}
+
+.advanced-panel summary::-webkit-details-marker {
+  display: none;
+}
+
+.advanced-panel summary::before {
+  content: '+ ';
+}
+
+.advanced-panel[open] summary::before {
+  content: '- ';
+}
+
+.advanced-sections {
+  margin-top: 0.85rem;
+  display: flex;
+  flex-direction: column;
+  gap: 1rem;
+}
+
+.advanced-section {
+  border: 1px solid #e2e8f0;
+  border-radius: 10px;
+  padding: 0.75rem;
+  background: #f8fafc;
+}
+
+.metrics-list {
+  margin: 0.75rem 0 0;
+  display: grid;
+  gap: 0.5rem;
+}
+
+.metrics-item {
+  border: 1px solid #d1d5db;
+  border-radius: 8px;
+  background: #ffffff;
+  padding: 0.55rem 0.65rem;
+}
+
+.metrics-item dt {
+  color: #4b5563;
+  font-size: 0.85rem;
+}
+
+.metrics-item dd {
+  margin: 0.2rem 0 0;
+  font-weight: 600;
 }
 
 .log-entry {
@@ -1498,9 +1978,31 @@ select {
   word-break: break-word;
 }
 
+.approval-impact {
+  margin: 0;
+  color: #374151;
+}
+
+.approval-intent {
+  margin: 0;
+  color: #111827;
+  font-weight: 600;
+}
+
 .queue-hint {
   color: #374151;
   font-size: 0.9rem;
+}
+
+@media (max-width: 980px) {
+  .chat-layout {
+    grid-template-columns: 1fr;
+  }
+
+  .conversation-panel,
+  .history-panel {
+    min-height: auto;
+  }
 }
 
 @media (max-width: 700px) {
@@ -1510,6 +2012,10 @@ select {
 
   .grow {
     min-width: 100%;
+  }
+
+  .composer-actions {
+    align-items: stretch;
   }
 }
 </style>

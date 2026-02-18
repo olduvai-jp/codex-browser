@@ -130,6 +130,32 @@ describe('App.vue ui phase-1 flows', () => {
     wrapper.unmount()
   })
 
+  it('uses bridgeUrl query parameter as websocket target on connect', async () => {
+    bridgeMock.setRequestHandler(async (method) => {
+      if (method === 'initialize') {
+        return { userAgent: 'mock-codex-agent' }
+      }
+
+      throw new Error(`Unexpected method: ${method}`)
+    })
+
+    const bridgeUrlFromQuery = 'ws://127.0.0.1:9999/bridge'
+    const originalPath = `${window.location.pathname}${window.location.search}${window.location.hash}` || '/'
+    window.history.replaceState({}, '', `/?bridgeUrl=${encodeURIComponent(bridgeUrlFromQuery)}`)
+
+    const wrapper = mount(App)
+    try {
+      await getByTestId(wrapper, 'connect-button').trigger('click')
+      await flushPromises()
+
+      const client = getClientInstance()
+      expect(client.connect).toHaveBeenCalledWith(bridgeUrlFromQuery)
+    } finally {
+      wrapper.unmount()
+      window.history.replaceState({}, '', originalPath)
+    }
+  })
+
   it('quick start connects and restores the latest conversation path', async () => {
     bridgeMock.setRequestHandler(async (method) => {
       if (method === 'initialize') {

@@ -193,9 +193,8 @@ class MockBridgeServer {
 }
 
 async function connectAndInitialize(page: Page, bridge: MockBridgeServer): Promise<void> {
-  await page.goto('/')
-  await page.getByLabel('Bridge WebSocket URL').fill(bridge.url)
-  await page.getByRole('button', { name: 'Connect' }).click()
+  await page.goto(`/?bridgeUrl=${encodeURIComponent(bridge.url)}`)
+  await page.getByTestId('connect-button').click()
 
   const initializeRequest = await bridge.waitForRequest('initialize')
   expect(initializeRequest.params).toEqual({
@@ -215,9 +214,17 @@ async function connectAndInitialize(page: Page, bridge: MockBridgeServer): Promi
     },
   })
 
-  await expect(page.locator('.status-grid')).toContainText('Connection: connected')
-  await expect(page.locator('.status-grid')).toContainText('Initialized: yes')
-  await expect(page.locator('.status-grid')).toContainText('User Agent: mock-codex-e2e-agent')
+  await expect(page.locator('.status-grid')).toContainText('接続状態: connected')
+  await expect(page.locator('.status-grid')).toContainText('初期化: 完了')
+  await expect(page.locator('.status-grid')).toContainText('ユーザーエージェント: mock-codex-e2e-agent')
+}
+
+async function openAdvancedPanel(page: Page): Promise<void> {
+  const panel = page.locator('details.advanced-panel')
+  const isOpen = await panel.evaluate((element) => (element as HTMLDetailsElement).open)
+  if (!isOpen) {
+    await page.locator('details.advanced-panel > summary').click()
+  }
 }
 
 test.describe('Phase 4 Cycle 1 QA flows', () => {
@@ -234,7 +241,8 @@ test.describe('Phase 4 Cycle 1 QA flows', () => {
   test('initialize -> thread/start -> turn/start -> completed', async ({ page }) => {
     await connectAndInitialize(page, bridge)
 
-    await page.getByRole('button', { name: 'Start New Thread' }).click()
+    await openAdvancedPanel(page)
+    await page.getByTestId('start-thread-button').click()
     const threadStart = await bridge.waitForRequest('thread/start')
     expect(threadStart.params).toEqual({ experimentalRawEvents: false })
 
@@ -247,10 +255,10 @@ test.describe('Phase 4 Cycle 1 QA flows', () => {
       },
     })
 
-    await expect(page.locator('.status-grid')).toContainText('Thread: thread-e2e-1')
+    await expect(page.locator('.status-grid')).toContainText('会話 ID: thread-e2e-1')
 
-    await page.getByPlaceholder('Type your message then send turn/start').fill('Hello from e2e test')
-    await page.getByRole('button', { name: 'Send turn/start' }).click()
+    await page.getByPlaceholder('メッセージを入力').fill('Hello from e2e test')
+    await page.getByTestId('send-turn-button').click()
 
     const turnStart = await bridge.waitForRequest('turn/start')
     expect(turnStart.params).toEqual({
@@ -320,8 +328,8 @@ test.describe('Phase 4 Cycle 1 QA flows', () => {
       },
     })
 
-    await expect(page.locator('.status-grid')).toContainText('Turn: turn-e2e-1')
-    await expect(page.locator('.status-grid')).toContainText('Turn Status: completed')
+    await expect(page.locator('.status-grid')).toContainText('ターン ID: turn-e2e-1')
+    await expect(page.locator('.status-grid')).toContainText('応答状態: completed')
     await expect(page.locator('.messages')).toContainText('Hello from e2e test')
     await expect(page.locator('.messages')).toContainText('Mock assistant reply')
     await expect(page.locator('.messages')).toContainText('Turn turn-e2e-1 completed with status: completed')
@@ -341,7 +349,7 @@ test.describe('Phase 4 Cycle 1 QA flows', () => {
     await expect(page.locator('.approval-backdrop')).toHaveCount(1)
     await expect(page.locator('.approval-modal')).toContainText('item/commandExecution/requestApproval')
 
-    await page.getByRole('button', { name: 'Decline' }).click()
+    await page.getByRole('button', { name: '拒否する' }).click()
 
     const declineResponse = await bridge.waitForMessage(
       (message) =>
@@ -369,7 +377,7 @@ test.describe('Phase 4 Cycle 1 QA flows', () => {
     await expect(page.locator('.approval-backdrop')).toHaveCount(1)
     await expect(page.locator('.approval-modal')).toContainText('item/fileChange/requestApproval')
 
-    await page.getByRole('button', { name: 'Accept' }).click()
+    await page.getByRole('button', { name: '許可する' }).click()
 
     const acceptResponse = await bridge.waitForMessage(
       (message) => message.id === 2 && isRecord(message.result) && message.result.decision === 'accept',

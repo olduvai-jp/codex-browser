@@ -55,7 +55,29 @@ type ApprovalMethodExplanation = {
 
 const DEFAULT_WS_URL = 'ws://127.0.0.1:8787/bridge'
 
-const wsUrl = ref(DEFAULT_WS_URL)
+function resolveBridgeWsUrl(): string {
+  const currentLocation = typeof window !== 'undefined' ? window.location : null
+  if (currentLocation) {
+    const queryBridgeUrl = new URLSearchParams(currentLocation.search).get('bridgeUrl')?.trim()
+    if (queryBridgeUrl) {
+      return queryBridgeUrl
+    }
+  }
+
+  const envBridgeUrl = import.meta.env.VITE_BRIDGE_WS_URL?.trim()
+  if (envBridgeUrl) {
+    return envBridgeUrl
+  }
+
+  if (currentLocation?.host) {
+    const scheme = currentLocation.protocol === 'https:' ? 'wss' : 'ws'
+    return `${scheme}://${currentLocation.host}/bridge`
+  }
+
+  return DEFAULT_WS_URL
+}
+
+const resolvedWsUrl = ref(resolveBridgeWsUrl())
 const connectionState = ref<ConnectionState>('disconnected')
 const initialized = ref(false)
 const userAgent = ref('')
@@ -844,8 +866,8 @@ async function connect(): Promise<void> {
 
   disconnect(false)
 
-  const url = wsUrl.value.trim() || DEFAULT_WS_URL
-  wsUrl.value = url
+  const url = resolveBridgeWsUrl()
+  resolvedWsUrl.value = url
   connectionState.value = 'connecting'
 
   const nextClient = new BridgeRpcClient(handleIncomingMessage, () => {
@@ -1261,16 +1283,6 @@ onBeforeUnmount(() => {
       <p class="subtitle">接続後に「会話を始める」を押すだけで、前回の続きか新規会話を準備できます。</p>
 
       <div class="row wrap">
-        <label class="field grow">
-          <span>接続先 WebSocket</span>
-          <input
-            v-model="wsUrl"
-            type="text"
-            placeholder="ws://127.0.0.1:8787/bridge"
-            :disabled="connectionState === 'connecting'"
-          />
-        </label>
-
         <button
           v-if="!isConnected"
           class="btn"
@@ -1293,6 +1305,7 @@ onBeforeUnmount(() => {
 
       <div class="status-grid">
         <p><strong>接続状態:</strong> {{ connectionState }}</p>
+        <p><strong>接続先:</strong> <code>{{ resolvedWsUrl }}</code></p>
         <p><strong>初期化:</strong> {{ initialized ? '完了' : '未完了' }}</p>
         <p><strong>ユーザーエージェント:</strong> {{ userAgent || '-' }}</p>
         <p><strong>会話 ID:</strong> <code>{{ activeThreadId || '-' }}</code></p>

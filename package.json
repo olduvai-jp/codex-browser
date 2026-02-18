@@ -4,7 +4,10 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "dev": "vite",
+    "dev": "npm run dev:all",
+    "dev:frontend": "vite",
+    "dev:backend": "tsx server/bridge.ts",
+    "dev:all": "run-p dev:frontend dev:backend",
     "bridge": "tsx server/bridge.ts",
     "build": "run-p type-check \"build-only {@}\" --",
     "preview": "vite preview",

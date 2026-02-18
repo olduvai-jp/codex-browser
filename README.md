@@ -29,11 +29,29 @@ See [Vite Configuration Reference](https://vite.dev/config/).
 npm install
 ```
 
-### Compile and Hot-Reload for Development
+### Run in Development
 
 ```sh
 npm run dev
 ```
+
+`npm run dev` starts both frontend (Vite) and backend bridge server.
+
+You can also run each side separately:
+
+```sh
+npm run dev:frontend
+npm run dev:backend
+```
+
+The frontend resolves the bridge WebSocket URL automatically with this priority:
+
+1. `bridgeUrl` query parameter (example: `http://localhost:5173/?bridgeUrl=ws://127.0.0.1:8787/bridge`)
+2. `VITE_BRIDGE_WS_URL`
+3. `ws(s)://<current-host>/bridge` from browser location
+4. `ws://127.0.0.1:8787/bridge` (default)
+
+When using `npm run dev:frontend`, Vite proxies `/bridge` websocket traffic to `ws://127.0.0.1:8787`, so priority 3 works in local development as well.
 
 ### Type-Check, Compile and Minify for Production
 

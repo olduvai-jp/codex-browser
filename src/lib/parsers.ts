@@ -122,12 +122,16 @@ export function normalizeThreadHistoryEntry(entry: unknown): ThreadHistoryEntry 
     pickNumberValue(base, ['turnCount', 'turn_count']) ??
     pickNumberValue(entry, ['turnCount', 'turn_count']) ??
     (Array.isArray(base.turns) ? base.turns.length : undefined)
+  const cwd = pickStringValue(base, ['cwd']) ?? pickStringValue(entry, ['cwd']) ?? undefined
+  const source = pickStringValue(base, ['source']) ?? pickStringValue(entry, ['source']) ?? undefined
 
   return {
     id,
     title: title.trim().length > 0 ? title : id,
     updatedAt,
     turnCount,
+    cwd,
+    source,
   }
 }
 

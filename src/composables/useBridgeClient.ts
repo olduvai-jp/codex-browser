@@ -30,6 +30,7 @@ import type {
 } from '@/types'
 
 const DEFAULT_WS_URL = 'ws://127.0.0.1:8787/bridge'
+const MAX_THREAD_HISTORY_ENTRIES = 50
 
 function resolveBridgeWsUrl(): string {
   const currentLocation = typeof window !== 'undefined' ? window.location : null
@@ -57,6 +58,23 @@ function isThreadNotFoundError(message: string): boolean {
   return /\bthread not found\b/i.test(message)
 }
 
+function selectThreadHistoryForDisplay(
+  entries: ThreadHistoryEntry[],
+  bridgeCwd: string,
+): ThreadHistoryEntry[] {
+  const normalizedBridgeCwd = bridgeCwd.trim()
+  if (normalizedBridgeCwd.length === 0) {
+    return entries.slice(0, MAX_THREAD_HISTORY_ENTRIES)
+  }
+
+  const cwdMatchedEntries = entries.filter((entry) => entry.cwd === normalizedBridgeCwd)
+  if (cwdMatchedEntries.length > 0) {
+    return cwdMatchedEntries.slice(0, MAX_THREAD_HISTORY_ENTRIES)
+  }
+
+  return entries.slice(0, MAX_THREAD_HISTORY_ENTRIES)
+}
+
 export function useBridgeClient() {
   const resolvedWsUrl = ref(resolveBridgeWsUrl())
   const connectionState = ref<ConnectionState>('disconnected')
@@ -74,6 +92,7 @@ export function useBridgeClient() {
   const configSnapshot = ref<unknown | null>(null)
   const quickStartInProgress = ref(false)
   const userGuidance = ref<UserGuidance | null>(null)
+  const bridgeCwd = ref('')
 
   const messages = ref<UiMessage[]>([])
   const logs = ref<LogEntry[]>([])
@@ -371,6 +390,9 @@ export function useBridgeClient() {
   function handleBridgeNotification(type: string, payload: unknown): void {
     if (type === 'bridge/status' && isRecord(payload)) {
       const event = typeof payload.event === 'string' ? payload.event : 'unknown'
+      if (event === 'bridge-started' && isRecord(payload.details)) {
+        bridgeCwd.value = pickStringValue(payload.details, ['cwd']) ?? ''
+      }
       pushLog('bridge', 'info', `bridge/status: ${event}`, payload)
       if (event === 'codex-exit' || event === 'codex-unavailable') {
         const hadActiveThread = activeThreadId.value.trim().length > 0
@@ -537,6 +559,7 @@ export function useBridgeClient() {
     userAgent.value = ''
     approvals.value = []
     approvalRequestedAtMsById.clear()
+    bridgeCwd.value = ''
     connectionState.value = 'disconnected'
   }
 
@@ -633,7 +656,7 @@ export function useBridgeClient() {
           : (threadHistory.value[0]?.id ?? '')
 
       if (preferredThreadId.length > 0) {
-        await readThread(preferredThreadId)
+        await resumeThread(preferredThreadId)
       }
 
       if (activeThreadId.value.trim().length === 0) {
@@ -700,7 +723,8 @@ export function useBridgeClient() {
 
     try {
       const response = await client.value.request('thread/list', {})
-      const nextHistory = parseThreadHistoryList(response)
+      const parsedHistory = parseThreadHistoryList(response)
+      const nextHistory = selectThreadHistoryForDisplay(parsedHistory, bridgeCwd.value)
       threadHistory.value = nextHistory
 
       if (nextHistory.length === 0) {
@@ -713,7 +737,17 @@ export function useBridgeClient() {
       if (!hasSelected) {
         selectedHistoryThreadId.value = nextHistory[0]?.id ?? ''
       }
-      pushLog('rpc', 'info', `thread/list completed (${nextHistory.length} threads)`, response)
+      const normalizedBridgeCwd = bridgeCwd.value.trim()
+      const matchedCount =
+        normalizedBridgeCwd.length === 0
+          ? 0
+          : parsedHistory.filter((entry) => entry.cwd === normalizedBridgeCwd).length
+      pushLog('rpc', 'info', `thread/list completed (${nextHistory.length} threads)`, {
+        total: parsedHistory.length,
+        shown: nextHistory.length,
+        bridgeCwd: normalizedBridgeCwd || null,
+        cwdMatchedCount: matchedCount,
+      })
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error)
       pushLog('rpc', 'error', `thread/list failed: ${message}`)
@@ -729,8 +763,8 @@ export function useBridgeClient() {
       return
     }
 
+    // thread/read is intentionally read-only and never activates a resumable conversation session.
     try {
-      historyResumeAttemptCount.value += 1
       const response = await client.value.request('thread/read', {
         threadId: resolvedThreadId,
         id: resolvedThreadId,
@@ -741,10 +775,9 @@ export function useBridgeClient() {
         return
       }
 
-      const hydratedThreadId = hydrateFromThreadSnapshot(thread, resolvedThreadId)
-      selectedHistoryThreadId.value = hydratedThreadId ?? resolvedThreadId
-      historyResumeSuccessCount.value += 1
-      pushLog('rpc', 'info', `thread/read completed: ${hydratedThreadId ?? resolvedThreadId}`, {
+      const readThreadId = pickStringValue(thread, ['id', 'threadId', 'thread_id']) ?? resolvedThreadId
+      selectedHistoryThreadId.value = readThreadId
+      pushLog('rpc', 'info', `thread/read completed (read-only): ${readThreadId}`, {
         turns: Array.isArray(thread.turns) ? thread.turns.length : 0,
       })
     } catch (error) {
@@ -755,25 +788,30 @@ export function useBridgeClient() {
     }
   }
 
-  async function resumeThread(): Promise<void> {
-    if (!client.value || !canResumeThread.value) {
+  async function resumeThread(threadId?: string): Promise<void> {
+    const resolvedThreadId =
+      typeof threadId === 'string' && threadId.trim().length > 0
+        ? threadId.trim()
+        : resumeThreadId.value.trim()
+    if (!client.value || !isConnected.value || !initialized.value || resolvedThreadId.length === 0) {
       return
     }
 
-    const threadId = resumeThreadId.value.trim()
+    resumeThreadId.value = resolvedThreadId
 
     try {
       historyResumeAttemptCount.value += 1
       const response = await client.value.request('thread/resume', {
-        threadId,
+        threadId: resolvedThreadId,
       })
 
       const thread =
         isRecord(response) && isRecord(response.thread) ? response.thread : extractThreadFromReadResult(response)
       if (thread) {
-        const hydratedThreadId = hydrateFromThreadSnapshot(thread, threadId)
+        const hydratedThreadId = hydrateFromThreadSnapshot(thread, resolvedThreadId)
+        selectedHistoryThreadId.value = hydratedThreadId ?? resolvedThreadId
         historyResumeSuccessCount.value += 1
-        pushLog('rpc', 'info', `thread/resume completed: ${hydratedThreadId ?? threadId}`, {
+        pushLog('rpc', 'info', `thread/resume completed: ${hydratedThreadId ?? resolvedThreadId}`, {
           turns: Array.isArray(thread.turns) ? thread.turns.length : 0,
         })
         return
@@ -782,7 +820,9 @@ export function useBridgeClient() {
       pushLog('rpc', 'warn', 'thread/resume response missing thread.id', response)
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error)
-      pushLog('rpc', 'error', `thread/resume failed: ${message}`)
+      pushLog('rpc', 'error', `thread/resume failed: ${message}`, {
+        threadId: resolvedThreadId,
+      })
     }
   }
 

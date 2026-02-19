@@ -24,6 +24,7 @@ import {
 const BRIDGE_HOST = process.env.BRIDGE_HOST ?? '127.0.0.1'
 const BRIDGE_PORT = Number.parseInt(process.env.BRIDGE_PORT ?? '8787', 10)
 const BRIDGE_PATH = process.env.BRIDGE_PATH ?? '/bridge'
+const BRIDGE_CWD = process.cwd()
 
 if (!Number.isFinite(BRIDGE_PORT) || BRIDGE_PORT <= 0) {
   throw new Error(`Invalid BRIDGE_PORT: ${process.env.BRIDGE_PORT ?? '(unset)'}`)
@@ -382,6 +383,7 @@ wsServer.on('connection', (client, request) => {
     host: BRIDGE_HOST,
     port: BRIDGE_PORT,
     path: BRIDGE_PATH,
+    cwd: BRIDGE_CWD,
     codexConnected: Boolean(codexProcess && !codexProcess.killed),
   }))
 
@@ -444,6 +446,7 @@ httpServer.listen(BRIDGE_PORT, BRIDGE_HOST, () => {
     host: BRIDGE_HOST,
     port: BRIDGE_PORT,
     path: BRIDGE_PATH,
+    cwd: BRIDGE_CWD,
   })
   console.log(`Bridge listening on ws://${BRIDGE_HOST}:${BRIDGE_PORT}${BRIDGE_PATH}`)
 })

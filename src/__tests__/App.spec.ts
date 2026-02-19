@@ -103,6 +103,13 @@ function findRequestCall(method: string): { method: string; params: unknown } | 
   return bridgeMock.getRequestCalls().find((call) => call.method === method)
 }
 
+function getVisibleHistoryThreadIds(wrapper: VueWrapper<ComponentPublicInstance>): string[] {
+  return wrapper
+    .findAll('aside button p.font-mono')
+    .map((entry) => entry.text().trim())
+    .filter((entry) => entry.length > 0)
+}
+
 describe('App.vue ui phase-1 flows', () => {
   beforeEach(() => {
     bridgeMock.reset()
@@ -175,7 +182,7 @@ describe('App.vue ui phase-1 flows', () => {
         }
       }
 
-      if (method === 'thread/read') {
+      if (method === 'thread/resume') {
         return {
           thread: {
             id: 'thread-quick-1',
@@ -203,12 +210,11 @@ describe('App.vue ui phase-1 flows', () => {
     })
 
     const wrapper = mount(App)
-    await getByTestId(wrapper, 'quick-start-button').trigger('click')
     await flushPromises()
 
     expect(findRequestCall('initialize')).toBeDefined()
     expect(findRequestCall('thread/list')).toBeDefined()
-    expect(findRequestCall('thread/read')).toBeDefined()
+    expect(findRequestCall('thread/resume')).toBeDefined()
     expect(wrapper.text()).toContain('会話 ID: thread-quick-1')
     expect(wrapper.text()).toContain('Quick start restored user message')
 
@@ -366,6 +372,7 @@ describe('App.vue ui phase-1 flows', () => {
     })
 
     const wrapper = mount(App)
+    await flushPromises()
     await getByTestId(wrapper, 'connect-button').trigger('click')
     await flushPromises()
 
@@ -435,7 +442,7 @@ describe('App.vue ui phase-1 flows', () => {
     wrapper.unmount()
   })
 
-  it('loads thread/list and restores selected history via thread/read', async () => {
+  it('loads thread/list and resumes selected history via thread/resume, then can send turn/start', async () => {
     bridgeMock.setRequestHandler(async (method) => {
       if (method === 'initialize') {
         return { userAgent: 'mock-codex-agent' }
@@ -462,7 +469,7 @@ describe('App.vue ui phase-1 flows', () => {
         }
       }
 
-      if (method === 'thread/read') {
+      if (method === 'thread/resume') {
         return {
           data: {
             thread: {
@@ -493,6 +500,14 @@ describe('App.vue ui phase-1 flows', () => {
         }
       }
 
+      if (method === 'turn/start') {
+        return {
+          turn: {
+            id: 'turn-history-send-1',
+          },
+        }
+      }
+
       throw new Error(`Unexpected method: ${method}`)
     })
 
@@ -511,16 +526,103 @@ describe('App.vue ui phase-1 flows', () => {
     await getByTestId(wrapper, 'history-open-selected-button').trigger('click')
     await flushPromises()
 
-    const readCall = findRequestCall('thread/read')
-    expect(readCall).toBeDefined()
-    expect(readCall?.params).toEqual({
+    const resumeCall = findRequestCall('thread/resume')
+    expect(resumeCall).toBeDefined()
+    expect(resumeCall?.params).toEqual({
       threadId: 'thread-history-1',
-      id: 'thread-history-1',
     })
     expect(wrapper.text()).toContain('会話 ID: thread-history-1')
     expect(wrapper.text()).toContain('History user message')
     expect(wrapper.text()).toContain('History assistant message')
     expect(wrapper.text()).toContain('応答状態: idle')
+
+    await wrapper.get('textarea').setValue('Send after history resume')
+    await wrapper.get('form.composer').trigger('submit')
+    await flushPromises()
+
+    const turnStartCall = findRequestCall('turn/start')
+    expect(turnStartCall).toBeDefined()
+    expect(turnStartCall?.params).toEqual({
+      threadId: 'thread-history-1',
+      input: [
+        {
+          type: 'text',
+          text: 'Send after history resume',
+          text_elements: [],
+        },
+      ],
+    })
+    expect(wrapper.text()).toContain('ターン ID: turn-history-send-1')
+
+    wrapper.unmount()
+  })
+
+  it('prioritizes cwd-matched history entries and caps sidebar list to 50', async () => {
+    const historyEntries = [
+      ...Array.from({ length: 10 }, (_value, index) => ({
+        id: `thread-unmatched-${index + 1}`,
+        title: `Unmatched ${index + 1}`,
+        cwd: '/other/workspace',
+      })),
+      ...Array.from({ length: 55 }, (_value, index) => ({
+        id: `thread-matched-${index + 1}`,
+        title: `Matched ${index + 1}`,
+        cwd: '/workspace/current',
+      })),
+    ]
+
+    bridgeMock.setRequestHandler(async (method) => {
+      if (method === 'initialize') {
+        return { userAgent: 'mock-codex-agent' }
+      }
+
+      if (method === 'thread/list') {
+        return {
+          threads: historyEntries,
+        }
+      }
+
+      throw new Error(`Unexpected method: ${method}`)
+    })
+
+    const wrapper = mount(App)
+    const client = await connectAndInitialize(wrapper)
+
+    client.emitMessage({
+      type: 'bridge/status',
+      payload: {
+        event: 'bridge-started',
+        details: {
+          cwd: '/workspace/current',
+        },
+      },
+    })
+    await flushPromises()
+
+    await getByTestId(wrapper, 'history-refresh-button').trigger('click')
+    await flushPromises()
+
+    const historyIdsWithMatch = getVisibleHistoryThreadIds(wrapper)
+    expect(historyIdsWithMatch).toHaveLength(50)
+    expect(historyIdsWithMatch.every((entry) => entry.startsWith('thread-matched-'))).toBe(true)
+
+    client.emitMessage({
+      type: 'bridge/status',
+      payload: {
+        event: 'bridge-started',
+        details: {
+          cwd: '/workspace/no-match',
+        },
+      },
+    })
+    await flushPromises()
+
+    await getByTestId(wrapper, 'history-refresh-button').trigger('click')
+    await flushPromises()
+
+    const historyIdsFallback = getVisibleHistoryThreadIds(wrapper)
+    expect(historyIdsFallback).toHaveLength(50)
+    expect(historyIdsFallback).toContain('thread-unmatched-1')
 
     wrapper.unmount()
   })
@@ -790,12 +892,23 @@ describe('App.vue ui phase-1 flows', () => {
   })
 
   it('shows send availability hint near composer', async () => {
+    let threadStartCallCount = 0
     bridgeMock.setRequestHandler(async (method) => {
       if (method === 'initialize') {
         return { userAgent: 'mock-codex-agent' }
       }
 
+      if (method === 'thread/list') {
+        return {
+          threads: [],
+        }
+      }
+
       if (method === 'thread/start') {
+        threadStartCallCount += 1
+        if (threadStartCallCount === 1) {
+          throw new Error('quick start thread/start should not activate test state')
+        }
         return { thread: { id: 'thread-send-hint-1' } }
       }
 

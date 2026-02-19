@@ -50,7 +50,6 @@ const {
   quickStartConversation,
   startThread,
   loadThreadHistory,
-  readThread,
   resumeThread,
   sendTurn,
   interruptTurn,
@@ -93,7 +92,7 @@ onMounted(() => {
           :can-refresh="isConnected && initialized"
           :is-turn-active="isTurnActive"
           @refresh="loadThreadHistory"
-          @open-thread="readThread($event)"
+          @open-thread="resumeThread($event)"
           @new-thread="startThread"
         />
       </div>

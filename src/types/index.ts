@@ -27,6 +27,8 @@ export type ThreadHistoryEntry = {
   title: string
   updatedAt?: string
   turnCount?: number
+  cwd?: string
+  source?: string
 }
 
 export type ModelOption = {

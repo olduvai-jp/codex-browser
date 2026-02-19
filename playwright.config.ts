@@ -1,6 +1,31 @@
 import process from 'node:process'
 import { defineConfig, devices } from '@playwright/test'
 
+function isEnvEnabled(name: string): boolean {
+  const value = process.env[name]?.trim().toLowerCase()
+  return value === '1' || value === 'true'
+}
+
+function resolveWebServerPort(): number {
+  const raw = process.env.PW_WEB_SERVER_PORT?.trim()
+  if (!raw) {
+    return 4173
+  }
+
+  const parsed = Number(raw)
+  return Number.isInteger(parsed) && parsed > 0 ? parsed : 4173
+}
+
+const isCi = Boolean(process.env.CI)
+const usePreviewServer = isCi || isEnvEnabled('PW_USE_PREVIEW_SERVER')
+const webServerHost = process.env.PW_WEB_SERVER_HOST?.trim() || '127.0.0.1'
+const webServerPort = resolveWebServerPort()
+const defaultWebServerCommand = usePreviewServer
+  ? `npm run build-only && npm run preview -- --host ${webServerHost} --port ${webServerPort} --strictPort`
+  : `npm run dev:frontend -- --host ${webServerHost} --port ${webServerPort} --strictPort`
+const webServerCommand = process.env.PW_WEB_SERVER_COMMAND?.trim() || defaultWebServerCommand
+const reuseExistingServer = !isCi && isEnvEnabled('PW_REUSE_EXISTING_SERVER')
+
 /**
  * Read environment variables from file.
  * https://github.com/motdotla/dotenv
@@ -34,13 +59,13 @@ export default defineConfig({
     /* Maximum time each action such as `click()` can take. Defaults to 0 (no limit). */
     actionTimeout: 0,
     /* Base URL to use in actions like `await page.goto('/')`. */
-    baseURL: process.env.CI ? 'http://localhost:4173' : 'http://localhost:5173',
+    baseURL: `http://${webServerHost}:${webServerPort}`,
 
     /* Collect trace when retrying the failed test. See https://playwright.dev/docs/trace-viewer */
     trace: 'on-first-retry',
 
-    /* Only on CI systems run the tests headless */
-    headless: !!process.env.CI,
+    /* Run all E2E tests in headless mode by default */
+    headless: true,
   },
 
   /* Configure projects for major browsers */
@@ -99,12 +124,12 @@ export default defineConfig({
   /* Run your local dev server before starting the tests */
   webServer: {
     /**
-     * Use the dev server by default for faster feedback loop.
-     * Use the preview server on CI for more realistic testing.
-     * Playwright will re-use the local server if there is already a dev-server running.
+     * Use preview server on CI.
+     * Keep local re-use disabled by default to avoid accidentally attaching to unrelated processes.
+     * Set PW_REUSE_EXISTING_SERVER=1 when explicit reuse is desired.
      */
-    command: process.env.CI ? 'npm run preview' : 'npm run dev:frontend',
-    port: process.env.CI ? 4173 : 5173,
-    reuseExistingServer: !process.env.CI,
+    command: webServerCommand,
+    port: webServerPort,
+    reuseExistingServer,
   },
 })

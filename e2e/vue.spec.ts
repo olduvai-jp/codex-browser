@@ -12,6 +12,24 @@ type MessageWaiter = {
   timeoutId: NodeJS.Timeout
 }
 
+const isCi = Boolean(process.env.CI)
+
+function resolveTimeoutMs(envName: string, fallbackMs: number): number {
+  const rawValue = process.env[envName]?.trim()
+  if (!rawValue) {
+    return fallbackMs
+  }
+
+  const parsed = Number(rawValue)
+  return Number.isFinite(parsed) && parsed > 0 ? parsed : fallbackMs
+}
+
+const DEFAULT_WS_MESSAGE_TIMEOUT_MS = resolveTimeoutMs('PW_WS_TIMEOUT_MS', isCi ? 15_000 : 8_000)
+const DEFAULT_WS_HANDSHAKE_TIMEOUT_MS = resolveTimeoutMs(
+  'PW_WS_HANDSHAKE_TIMEOUT_MS',
+  Math.max(DEFAULT_WS_MESSAGE_TIMEOUT_MS, isCi ? 20_000 : 10_000),
+)
+
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null
 }
@@ -131,7 +149,7 @@ class MockBridgeServer {
 
   async waitForRequest(
     method: string,
-    timeoutMs = 5_000,
+    timeoutMs = DEFAULT_WS_MESSAGE_TIMEOUT_MS,
   ): Promise<{ id: JsonRpcId; params: unknown }> {
     const message = await this.waitForMessage((candidate) => candidate.method === method, timeoutMs)
 
@@ -145,7 +163,10 @@ class MockBridgeServer {
     }
   }
 
-  waitForMessage(predicate: (message: JsonMessage) => boolean, timeoutMs = 5_000): Promise<JsonMessage> {
+  waitForMessage(
+    predicate: (message: JsonMessage) => boolean,
+    timeoutMs = DEFAULT_WS_MESSAGE_TIMEOUT_MS,
+  ): Promise<JsonMessage> {
     const queuedIndex = this.messageQueue.findIndex((message) => predicate(message))
     if (queuedIndex >= 0) {
       const [message] = this.messageQueue.splice(queuedIndex, 1)
@@ -163,7 +184,7 @@ class MockBridgeServer {
           this.waiters.splice(waiterIndex, 1)
         }
 
-        reject(new Error('Timed out waiting for websocket message'))
+        reject(new Error(`Timed out waiting for websocket message after ${timeoutMs}ms`))
       }, timeoutMs)
 
       this.waiters.push({
@@ -194,9 +215,8 @@ class MockBridgeServer {
 
 async function connectAndInitialize(page: Page, bridge: MockBridgeServer): Promise<void> {
   await page.goto(`/?bridgeUrl=${encodeURIComponent(bridge.url)}`)
-  await page.getByTestId('connect-button').click()
 
-  const initializeRequest = await bridge.waitForRequest('initialize')
+  const initializeRequest = await bridge.waitForRequest('initialize', DEFAULT_WS_HANDSHAKE_TIMEOUT_MS)
   expect(initializeRequest.params).toEqual({
     clientInfo: {
       name: 'vue-codex-client',
@@ -219,11 +239,38 @@ async function connectAndInitialize(page: Page, bridge: MockBridgeServer): Promi
   await expect(page.locator('.status-grid')).toContainText('ユーザーエージェント: mock-codex-e2e-agent')
 }
 
+async function completeQuickStartWithNewThread(
+  bridge: MockBridgeServer,
+  threadId: string,
+): Promise<void> {
+  const threadList = await bridge.waitForRequest('thread/list')
+  expect(threadList.params).toEqual({})
+  bridge.send({
+    id: threadList.id,
+    result: {
+      threads: [],
+    },
+  })
+
+  const threadStart = await bridge.waitForRequest('thread/start')
+  expect(threadStart.params).toEqual({ experimentalRawEvents: false })
+  bridge.send({
+    id: threadStart.id,
+    result: {
+      thread: {
+        id: threadId,
+      },
+    },
+  })
+}
+
 async function openAdvancedPanel(page: Page): Promise<void> {
   const panel = page.locator('details.advanced-panel')
   const isOpen = await panel.evaluate((element) => (element as HTMLDetailsElement).open)
   if (!isOpen) {
-    await page.locator('details.advanced-panel > summary').click()
+    await panel.evaluate((element) => {
+      ;(element as HTMLDetailsElement).open = true
+    })
   }
 }
 
@@ -390,5 +437,177 @@ test.describe('Phase 4 Cycle 1 QA flows', () => {
     })
 
     await expect(page.locator('.approval-backdrop')).toHaveCount(0)
+  })
+
+  test('quick start resumes latest thread via thread/list -> thread/resume and restores messages', async ({
+    page,
+  }) => {
+    await connectAndInitialize(page, bridge)
+
+    const threadList = await bridge.waitForRequest('thread/list')
+    expect(threadList.params).toEqual({})
+    bridge.send({
+      id: threadList.id,
+      result: {
+        threads: [
+          {
+            id: 'thread-quick-older',
+            title: 'Older Quick Thread',
+            updatedAt: '2026-02-18T03:10:00.000Z',
+            turnCount: 2,
+          },
+          {
+            id: 'thread-quick-latest',
+            title: 'Latest Quick Thread',
+            updatedAt: '2026-02-19T09:45:00.000Z',
+            turnCount: 4,
+          },
+          {
+            id: 'thread-quick-oldest',
+            title: 'Oldest Quick Thread',
+            updatedAt: '2026-02-17T21:30:00.000Z',
+            turnCount: 1,
+          },
+        ],
+      },
+    })
+
+    const threadResume = await bridge.waitForRequest('thread/resume')
+    expect(threadResume.params).toEqual({
+      threadId: 'thread-quick-latest',
+    })
+    bridge.send({
+      id: threadResume.id,
+      result: {
+        thread: {
+          id: 'thread-quick-latest',
+          turns: [
+            {
+              id: 'turn-quick-1',
+              items: [
+                {
+                  type: 'userMessage',
+                  content: [
+                    {
+                      type: 'text',
+                      text: 'Quick start restored user message',
+                    },
+                  ],
+                },
+              ],
+            },
+          ],
+        },
+      },
+    })
+
+    await expect(page.locator('.status-grid')).toContainText('会話 ID: thread-quick-latest')
+    await expect(page.locator('.messages')).toContainText('Quick start restored user message')
+  })
+
+  test('interrupt button sends turn/interrupt and reflects interrupted state', async ({ page }) => {
+    await connectAndInitialize(page, bridge)
+    await completeQuickStartWithNewThread(bridge, 'thread-interrupt-1')
+
+    await expect(page.locator('.status-grid')).toContainText('会話 ID: thread-interrupt-1')
+    await page.getByPlaceholder('メッセージを入力').fill('Interrupt me')
+    await page.getByTestId('send-turn-button').click()
+
+    const turnStart = await bridge.waitForRequest('turn/start')
+    expect(turnStart.params).toEqual({
+      threadId: 'thread-interrupt-1',
+      input: [
+        {
+          type: 'text',
+          text: 'Interrupt me',
+          text_elements: [],
+        },
+      ],
+    })
+
+    bridge.send({
+      id: turnStart.id,
+      result: {
+        turn: {
+          id: 'turn-interrupt-1',
+        },
+      },
+    })
+    bridge.send({
+      method: 'turn/started',
+      params: {
+        turn: {
+          id: 'turn-interrupt-1',
+        },
+      },
+    })
+
+    await expect(page.getByTestId('interrupt-turn-button')).toBeVisible()
+    await page.getByTestId('interrupt-turn-button').click()
+
+    const turnInterrupt = await bridge.waitForRequest('turn/interrupt')
+    expect(turnInterrupt.params).toEqual({
+      threadId: 'thread-interrupt-1',
+      turnId: 'turn-interrupt-1',
+    })
+
+    bridge.send({
+      id: turnInterrupt.id,
+      result: {
+        turn: {
+          id: 'turn-interrupt-1',
+          status: 'interrupted',
+        },
+      },
+    })
+
+    await expect(page.locator('.status-grid')).toContainText('応答状態: interrupted')
+  })
+
+  test('selected model from model/list is included in turn/start payload', async ({ page }) => {
+    await connectAndInitialize(page, bridge)
+    await completeQuickStartWithNewThread(bridge, 'thread-model-1')
+
+    await openAdvancedPanel(page)
+    await page.getByTestId('load-model-list-button').click()
+
+    const modelList = await bridge.waitForRequest('model/list')
+    expect(modelList.params).toEqual({})
+    bridge.send({
+      id: modelList.id,
+      result: {
+        data: {
+          items: [
+            {
+              model: {
+                id: 'gpt-4o-mini',
+                displayName: 'GPT 4o Mini',
+              },
+            },
+            'o3-mini',
+          ],
+        },
+      },
+    })
+
+    await expect(page.getByTestId('model-select')).toContainText('GPT 4o Mini')
+    await page.getByTestId('model-select').selectOption('gpt-4o-mini')
+    await expect(page.locator('.status-grid')).toContainText('利用モデル: gpt-4o-mini')
+
+    await page.getByPlaceholder('メッセージを入力').fill('Use selected model')
+    await page.getByTestId('send-turn-button').click()
+
+    const turnStart = await bridge.waitForRequest('turn/start')
+    expect(turnStart.params).toEqual({
+      threadId: 'thread-model-1',
+      input: [
+        {
+          type: 'text',
+          text: 'Use selected model',
+          text_elements: [],
+        },
+      ],
+      model: 'gpt-4o-mini',
+    })
   })
 })

@@ -32,6 +32,41 @@ import type {
 const DEFAULT_WS_URL = 'ws://127.0.0.1:8787/bridge'
 const MAX_THREAD_HISTORY_ENTRIES = 50
 
+function parseUpdatedAtMs(updatedAt?: string): number | null {
+  if (typeof updatedAt !== 'string' || updatedAt.trim().length === 0) {
+    return null
+  }
+
+  const timestamp = Date.parse(updatedAt)
+  return Number.isNaN(timestamp) ? null : timestamp
+}
+
+function sortThreadHistoryByUpdatedAt(entries: ThreadHistoryEntry[]): ThreadHistoryEntry[] {
+  return entries
+    .map((entry, index) => ({
+      entry,
+      index,
+      updatedAtMs: parseUpdatedAtMs(entry.updatedAt),
+    }))
+    .sort((left, right) => {
+      if (left.updatedAtMs == null && right.updatedAtMs == null) {
+        return left.index - right.index
+      }
+      if (left.updatedAtMs == null) {
+        return 1
+      }
+      if (right.updatedAtMs == null) {
+        return -1
+      }
+      if (left.updatedAtMs === right.updatedAtMs) {
+        return left.index - right.index
+      }
+
+      return right.updatedAtMs - left.updatedAtMs
+    })
+    .map(({ entry }) => entry)
+}
+
 function resolveBridgeWsUrl(): string {
   const currentLocation = typeof window !== 'undefined' ? window.location : null
   if (currentLocation) {
@@ -63,16 +98,17 @@ function selectThreadHistoryForDisplay(
   bridgeCwd: string,
 ): ThreadHistoryEntry[] {
   const normalizedBridgeCwd = bridgeCwd.trim()
+  const sortedEntries = sortThreadHistoryByUpdatedAt(entries)
   if (normalizedBridgeCwd.length === 0) {
-    return entries.slice(0, MAX_THREAD_HISTORY_ENTRIES)
+    return sortedEntries.slice(0, MAX_THREAD_HISTORY_ENTRIES)
   }
 
-  const cwdMatchedEntries = entries.filter((entry) => entry.cwd === normalizedBridgeCwd)
+  const cwdMatchedEntries = sortedEntries.filter((entry) => entry.cwd === normalizedBridgeCwd)
   if (cwdMatchedEntries.length > 0) {
     return cwdMatchedEntries.slice(0, MAX_THREAD_HISTORY_ENTRIES)
   }
 
-  return entries.slice(0, MAX_THREAD_HISTORY_ENTRIES)
+  return sortedEntries.slice(0, MAX_THREAD_HISTORY_ENTRIES)
 }
 
 export function useBridgeClient() {

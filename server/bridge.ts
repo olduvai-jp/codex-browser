@@ -9,9 +9,17 @@ import {
   createBridgeStatus,
   type BridgeNotification,
 } from './bridge-protocol'
+import { createClientNotificationForWriteResult } from './bridge-client-message'
 import { CodexStdinController } from './codex-stdin-controller'
 import { CodexRestartLifecycle } from './codex-restart-lifecycle'
 import { createClientNotificationForBrowserInboundMessage } from './bridge-browser-message'
+import { shouldMarkInitializeRequestInFlight } from './initialize-request-write-result'
+import {
+  InitializeRequestCache,
+  parseInitializeRequest,
+  parseJsonRpcResponse,
+  type InitializeClientResponse,
+} from './initialize-request-cache'
 
 const BRIDGE_HOST = process.env.BRIDGE_HOST ?? '127.0.0.1'
 const BRIDGE_PORT = Number.parseInt(process.env.BRIDGE_PORT ?? '8787', 10)
@@ -59,6 +67,7 @@ const codexStdinController = new CodexStdinController({
     broadcastLog('bridge', 'info', 'codex stdin drain received; writes resumed')
   },
 })
+const initializeRequestCache = new InitializeRequestCache<WebSocket>()
 
 function decodeRawMessage(raw: RawData): string {
   if (typeof raw === 'string') {
@@ -128,13 +137,48 @@ function broadcastStatus(
   broadcast(createBridgeStatus(event, details))
 }
 
+function sendInitializeClientResponses(
+  responses: InitializeClientResponse<WebSocket>[],
+): void {
+  for (const response of responses) {
+    sendToClient(response.client, response.response)
+  }
+}
+
+function clearInitializeState(reason: string, details?: Record<string, unknown>): void {
+  initializeRequestCache.clearCache()
+
+  const pendingResponses = initializeRequestCache.failPendingRequests({
+    code: -32001,
+    message: 'Initialize request aborted because codex became unavailable',
+    data: {
+      reason,
+      ...details,
+    },
+  })
+  sendInitializeClientResponses(pendingResponses)
+}
+
 function handleCodexStdoutLine(line: string): void {
   if (line.trim() === '') {
     return
   }
 
   try {
-    const parsed = JSON.parse(line) as object
+    const parsed = JSON.parse(line) as unknown
+    const jsonRpcResponse = parseJsonRpcResponse(parsed)
+    if (jsonRpcResponse) {
+      const initializeResponses = initializeRequestCache.consumeCodexResponse(jsonRpcResponse)
+      if (initializeResponses) {
+        sendInitializeClientResponses(initializeResponses)
+        return
+      }
+    }
+
+    if (typeof parsed !== 'object' || parsed === null) {
+      throw new Error('Expected JSON object from codex stdout')
+    }
+
     broadcast(parsed)
   } catch (error) {
     broadcastLog('codex-stdout', 'warn', 'Non-JSON line from codex stdout', {
@@ -206,6 +250,8 @@ function startCodexProcess(): void {
     return
   }
 
+  clearInitializeState('codex-start')
+
   const processInstance = spawn('codex', ['app-server', '--listen', 'stdio://'], {
     stdio: ['pipe', 'pipe', 'pipe'],
   })
@@ -242,6 +288,7 @@ function startCodexProcess(): void {
     if (codexProcess === processInstance) {
       codexProcess = null
     }
+    clearInitializeState('codex-spawn-error', errorDetails)
 
     broadcastStatus('codex-spawn-error', {
       expected: isShuttingDown,
@@ -266,6 +313,7 @@ function startCodexProcess(): void {
     if (codexProcess === processInstance) {
       codexProcess = null
     }
+    clearInitializeState('codex-exit', exitDetails)
     broadcastStatus('codex-exit', exitDetails)
     broadcastLog('bridge', 'warn', 'codex app-server exited', exitDetails)
 
@@ -276,8 +324,46 @@ function startCodexProcess(): void {
   })
 }
 
+function handleInitializeRequest(client: WebSocket, parsedMessage: unknown): boolean {
+  const initializeRequest = parseInitializeRequest(parsedMessage)
+  if (!initializeRequest) {
+    return false
+  }
+
+  const cachedResponse = initializeRequestCache.getCachedResponse(client, initializeRequest.id)
+  if (cachedResponse) {
+    sendToClient(cachedResponse.client, cachedResponse.response)
+    return true
+  }
+
+  if (initializeRequestCache.hasInFlightRequest()) {
+    initializeRequestCache.queueRequest(client, initializeRequest.id)
+    return true
+  }
+
+  const writeResult = codexStdinController.writeJsonLine(parsedMessage)
+  const notification = createClientNotificationForWriteResult(writeResult)
+  if (notification) {
+    sendToClient(client, notification)
+  }
+
+  if (shouldMarkInitializeRequestInFlight(writeResult)) {
+    initializeRequestCache.markInFlightRequest(client, initializeRequest.id)
+  }
+
+  return true
+}
+
 function handleClientMessage(client: WebSocket, raw: RawData): void {
   const line = decodeRawMessage(raw)
+  try {
+    const parsed = JSON.parse(line) as unknown
+    if (handleInitializeRequest(client, parsed)) {
+      return
+    }
+  } catch {
+    // Fall through to existing parse error handling.
+  }
 
   const notification = createClientNotificationForBrowserInboundMessage(line, (message) =>
     codexStdinController.writeJsonLine(message))

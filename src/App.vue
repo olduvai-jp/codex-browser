@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { ref } from 'vue'
+import { ref, onMounted } from 'vue'
 import { useBridgeClient } from './composables/useBridgeClient'
 import AppHeader from './components/header/AppHeader.vue'
 import ThreadSidebar from './components/sidebar/ThreadSidebar.vue'
@@ -23,7 +23,6 @@ const {
   modelOptions,
   selectedModelId,
   configSnapshot,
-  quickStartInProgress,
   userGuidance,
   messages,
   logs,
@@ -39,7 +38,6 @@ const {
   canResumeThread,
   canSendMessage,
   canInterruptTurn,
-  canQuickStartConversation,
   currentApproval,
   sendStateHint,
   currentApprovalExplanation,
@@ -62,6 +60,10 @@ const {
 } = useBridgeClient()
 
 const sidebarOpen = ref(false)
+
+onMounted(() => {
+  quickStartConversation()
+})
 </script>
 
 <template>
@@ -70,13 +72,10 @@ const sidebarOpen = ref(false)
     <AppHeader
       :connection-state="connectionState"
       :is-connected="isConnected"
-      :can-quick-start="canQuickStartConversation"
-      :quick-start-in-progress="quickStartInProgress"
       :user-guidance="userGuidance"
       :sidebar-open="sidebarOpen"
       @connect="connect"
       @disconnect="disconnect()"
-      @quick-start="quickStartConversation"
       @toggle-sidebar="sidebarOpen = !sidebarOpen"
     />
 

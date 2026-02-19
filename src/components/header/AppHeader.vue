@@ -4,8 +4,6 @@ import type { ConnectionState, UserGuidance } from '@/types'
 defineProps<{
   connectionState: ConnectionState
   isConnected: boolean
-  canQuickStart: boolean
-  quickStartInProgress: boolean
   userGuidance: UserGuidance | null
   sidebarOpen: boolean
 }>()
@@ -13,7 +11,6 @@ defineProps<{
 const emit = defineEmits<{
   connect: []
   disconnect: []
-  'quick-start': []
   'toggle-sidebar': []
 }>()
 </script>
@@ -57,14 +54,6 @@ const emit = defineEmits<{
         @click="emit('disconnect')"
       >
         切断する
-      </button>
-      <button
-        class="rounded-lg bg-accent px-3 py-1.5 text-xs font-medium text-white transition-colors hover:bg-accent-hover disabled:opacity-40"
-        data-testid="quick-start-button"
-        :disabled="!canQuickStart"
-        @click="emit('quick-start')"
-      >
-        {{ quickStartInProgress ? '準備中...' : '会話を始める' }}
       </button>
     </div>
   </header>

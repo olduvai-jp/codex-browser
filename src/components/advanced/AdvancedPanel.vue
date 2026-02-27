@@ -1,8 +1,9 @@
 <script setup lang="ts">
-import type { LogEntry, ModelOption } from '@/types'
+import type { LogEntry, ModelOption, ToolCallEntry } from '@/types'
 import { stringifyDetails } from '@/lib/formatters'
 import MetricsPanel from './MetricsPanel.vue'
 import LogViewer from './LogViewer.vue'
+import ToolCallViewer from './ToolCallViewer.vue'
 
 defineProps<{
   canStartThread: boolean
@@ -14,6 +15,7 @@ defineProps<{
   selectedModelId: string
   configSnapshot: unknown | null
   logs: LogEntry[]
+  toolCalls: ToolCallEntry[]
   // Status info
   connectionState: string
   resolvedWsUrl: string
@@ -158,6 +160,9 @@ const emit = defineEmits<{
         :turn-start-count="turnStartCount"
         :model-selection-rate-label="modelSelectionRateLabel"
       />
+
+      <!-- Tool Calls -->
+      <ToolCallViewer :tool-calls="toolCalls" />
 
       <!-- Logs -->
       <LogViewer :logs="logs" />

@@ -7,6 +7,7 @@ import MessageList from './components/chat/MessageList.vue'
 import ChatComposer from './components/chat/ChatComposer.vue'
 import AdvancedPanel from './components/advanced/AdvancedPanel.vue'
 import ApprovalModal from './components/approval/ApprovalModal.vue'
+import ToolUserInputModal from './components/tool/ToolUserInputModal.vue'
 
 const {
   resolvedWsUrl,
@@ -26,6 +27,8 @@ const {
   userGuidance,
   messages,
   logs,
+  toolCalls,
+  toolUserInputRequests,
   approvals,
   historyResumeAttemptCount,
   historyResumeSuccessCount,
@@ -38,6 +41,7 @@ const {
   canResumeThread,
   canSendMessage,
   canInterruptTurn,
+  currentToolUserInputRequest,
   currentApproval,
   sendStateHint,
   currentApprovalExplanation,
@@ -55,6 +59,8 @@ const {
   interruptTurn,
   loadModelList,
   loadConfig,
+  respondToToolUserInput,
+  cancelToolUserInputRequest,
   respondToApproval,
 } = useBridgeClient()
 
@@ -132,6 +138,7 @@ onMounted(() => {
       :selected-model-id="selectedModelId"
       :config-snapshot="configSnapshot"
       :logs="logs"
+      :tool-calls="toolCalls"
       :connection-state="connectionState"
       :resolved-ws-url="resolvedWsUrl"
       :user-agent="userAgent"
@@ -162,6 +169,15 @@ onMounted(() => {
       :explanation="currentApprovalExplanation"
       :queue-size="approvals.length"
       @respond="respondToApproval"
+    />
+
+    <!-- Tool User Input Modal -->
+    <ToolUserInputModal
+      v-if="currentToolUserInputRequest"
+      :request="currentToolUserInputRequest"
+      :queue-size="toolUserInputRequests.length"
+      @submit="respondToToolUserInput"
+      @cancel="cancelToolUserInputRequest"
     />
   </div>
 </template>

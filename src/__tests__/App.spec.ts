@@ -84,6 +84,14 @@ function openAdvancedPanel(wrapper: VueWrapper<ComponentPublicInstance>): void {
   }
 }
 
+function openAllToolCallEntries(wrapper: VueWrapper<ComponentPublicInstance>): void {
+  for (const details of wrapper.findAll('[data-testid="tool-call-entry"]')) {
+    if (!details.attributes('open')) {
+      details.element.setAttribute('open', '')
+    }
+  }
+}
+
 function getClientInstance(): InstanceType<typeof bridgeMock.MockBridgeRpcClient> {
   const client = bridgeMock.MockBridgeRpcClient.instances[0]
   if (!client) {
@@ -1062,6 +1070,626 @@ describe('App.vue ui phase-1 flows', () => {
     await flushPromises()
 
     expect(getByTestId(wrapper, 'metric-approval-decision').text()).toContain('2 件 / 平均 500 ms')
+
+    nowSpy.mockRestore()
+    wrapper.unmount()
+  })
+
+  it('responds to item/tool/requestUserInput with ToolRequestUserInputResponse answers payload', async () => {
+    bridgeMock.setRequestHandler(async (method) => {
+      if (method === 'initialize') {
+        return { userAgent: 'mock-codex-agent' }
+      }
+
+      throw new Error(`Unexpected method: ${method}`)
+    })
+
+    const wrapper = mount(App)
+    const client = await connectAndInitialize(wrapper)
+    openAdvancedPanel(wrapper)
+
+    client.emitMessage({
+      id: 'tool-input-1',
+      method: 'item/tool/requestUserInput',
+      params: {
+        turnId: 'turn-tool-input-1',
+        callId: 'call-tool-input-1',
+        tool: 'user_prompt_tool',
+        questions: [
+          {
+            questionId: 'q_name',
+            label: 'Your name',
+          },
+          {
+            questionId: 'q_reason',
+            label: 'Reason',
+          },
+        ],
+      },
+    })
+    await flushPromises()
+
+    expect(wrapper.find('.tool-input-backdrop').exists()).toBe(true)
+    expect(wrapper.find('.approval-backdrop').exists()).toBe(false)
+    expect(wrapper.text()).toContain('user_prompt_tool')
+    expect(wrapper.text()).toContain('inProgress')
+
+    await getByTestId(wrapper, 'tool-user-input-field-q_name').setValue('Alice')
+    await getByTestId(wrapper, 'tool-user-input-field-q_reason').setValue('Need access')
+    await getByTestId(wrapper, 'tool-user-input-submit').trigger('click')
+    await flushPromises()
+
+    expect(client.respond).toHaveBeenCalledWith('tool-input-1', {
+      answers: {
+        q_name: { answers: ['Alice'] },
+        q_reason: { answers: ['Need access'] },
+      },
+    })
+    expect(wrapper.find('.tool-input-backdrop').exists()).toBe(false)
+    expect(wrapper.text()).toContain('completed')
+
+    wrapper.unmount()
+  })
+
+  it('responds to tool user input cancel with empty answers payload', async () => {
+    bridgeMock.setRequestHandler(async (method) => {
+      if (method === 'initialize') {
+        return { userAgent: 'mock-codex-agent' }
+      }
+
+      throw new Error(`Unexpected method: ${method}`)
+    })
+
+    const wrapper = mount(App)
+    const client = await connectAndInitialize(wrapper)
+    openAdvancedPanel(wrapper)
+
+    client.emitMessage({
+      id: 'tool-input-cancel-1',
+      method: 'item/tool/requestUserInput',
+      params: {
+        turnId: 'turn-tool-input-cancel-1',
+        callId: 'call-tool-input-cancel-1',
+        tool: 'user_prompt_tool_cancel',
+        questions: [
+          {
+            questionId: 'q_name',
+            label: 'Your name',
+          },
+          {
+            questionId: 'q_reason',
+            label: 'Reason',
+          },
+        ],
+      },
+    })
+    await flushPromises()
+
+    expect(wrapper.find('.tool-input-backdrop').exists()).toBe(true)
+    expect(wrapper.text()).toContain('user_prompt_tool_cancel')
+    expect(wrapper.text()).toContain('inProgress')
+
+    await getByTestId(wrapper, 'tool-user-input-cancel').trigger('click')
+    await flushPromises()
+
+    expect(client.respond).toHaveBeenCalledWith('tool-input-cancel-1', {
+      answers: {
+        q_name: { answers: [] },
+        q_reason: { answers: [] },
+      },
+    })
+    expect(wrapper.find('.tool-input-backdrop').exists()).toBe(false)
+    expect(wrapper.text()).toContain('failed')
+
+    wrapper.unmount()
+  })
+
+  it('keeps approval and tool input queues independent when both are shown at the same time', async () => {
+    bridgeMock.setRequestHandler(async (method) => {
+      if (method === 'initialize') {
+        return { userAgent: 'mock-codex-agent' }
+      }
+
+      throw new Error(`Unexpected method: ${method}`)
+    })
+
+    const wrapper = mount(App)
+    const client = await connectAndInitialize(wrapper)
+
+    client.emitMessage({
+      id: 'approval-and-tool-1',
+      method: 'item/commandExecution/requestApproval',
+      params: {
+        command: 'echo approval-and-tool',
+      },
+    })
+    client.emitMessage({
+      id: 'approval-and-tool-tool-1',
+      method: 'item/tool/requestUserInput',
+      params: {
+        turnId: 'turn-approval-and-tool-1',
+        callId: 'call-approval-and-tool-1',
+        tool: 'approval_tool_pair',
+        questions: [
+          {
+            questionId: 'q_confirm',
+            label: 'Confirm message',
+          },
+        ],
+      },
+    })
+    await flushPromises()
+
+    expect(wrapper.find('.approval-backdrop').exists()).toBe(true)
+    expect(wrapper.find('.tool-input-backdrop').exists()).toBe(true)
+    expect(wrapper.get('.approval-modal').text()).toContain('approval-and-tool-1')
+    expect(wrapper.get('.tool-input-modal').text()).toContain('approval-and-tool-tool-1')
+
+    await getByTestId(wrapper, 'tool-user-input-field-q_confirm').setValue('ready')
+    await getByTestId(wrapper, 'tool-user-input-submit').trigger('click')
+    await flushPromises()
+
+    expect(client.respond).toHaveBeenNthCalledWith(1, 'approval-and-tool-tool-1', {
+      answers: {
+        q_confirm: { answers: ['ready'] },
+      },
+    })
+    expect(wrapper.find('.tool-input-backdrop').exists()).toBe(false)
+    expect(wrapper.find('.approval-backdrop').exists()).toBe(true)
+
+    const approvalAcceptButton = wrapper
+      .get('.approval-modal')
+      .findAll('button')
+      .find((button) => button.text().trim() === '許可する')
+    if (!approvalAcceptButton) {
+      throw new Error('Expected approval accept button to exist')
+    }
+    await approvalAcceptButton.trigger('click')
+    await flushPromises()
+
+    expect(client.respond).toHaveBeenNthCalledWith(2, 'approval-and-tool-1', {
+      decision: 'accept',
+    })
+    expect(wrapper.find('.approval-backdrop').exists()).toBe(false)
+    expect(wrapper.find('.tool-input-backdrop').exists()).toBe(false)
+
+    wrapper.unmount()
+  })
+
+  it('responds to item/tool/call with explicit failure and reflects it in tool visibility', async () => {
+    bridgeMock.setRequestHandler(async (method) => {
+      if (method === 'initialize') {
+        return { userAgent: 'mock-codex-agent' }
+      }
+
+      throw new Error(`Unexpected method: ${method}`)
+    })
+
+    const wrapper = mount(App)
+    const client = await connectAndInitialize(wrapper)
+    openAdvancedPanel(wrapper)
+
+    client.emitMessage({
+      id: 9001,
+      method: 'item/tool/call',
+      params: {
+        threadId: 'thread-tool-call-1',
+        turnId: 'turn-tool-call-1',
+        callId: 'call-tool-call-1',
+        tool: 'external_weather_tool',
+        arguments: {
+          city: 'Tokyo',
+        },
+      },
+    })
+    await flushPromises()
+
+    expect(client.respond).toHaveBeenCalledWith(
+      9001,
+      expect.objectContaining({
+        success: false,
+        contentItems: expect.arrayContaining([
+          expect.objectContaining({
+            type: 'text',
+          }),
+        ]),
+      }),
+    )
+    const unsupportedSendCall = client.send.mock.calls.find((call) => {
+      const payload = call[0] as { error?: { code?: number } } | undefined
+      return payload?.error?.code === -32601
+    })
+    expect(unsupportedSendCall).toBeUndefined()
+
+    expect(wrapper.text()).toContain('external_weather_tool')
+    expect(wrapper.text()).toContain('call-tool-call-1')
+    expect(wrapper.text()).toContain('failed')
+    expect(wrapper.text()).not.toContain('Unsupported server request: item/tool/call')
+
+    wrapper.unmount()
+  })
+
+  it('visualizes tool calls and handles tool notifications without unhandled logs', async () => {
+    bridgeMock.setRequestHandler(async (method) => {
+      if (method === 'initialize') {
+        return { userAgent: 'mock-codex-agent' }
+      }
+
+      if (method === 'thread/list') {
+        return { threads: [] }
+      }
+
+      throw new Error(`Unexpected method: ${method}`)
+    })
+
+    const nowSpy = vi.spyOn(Date, 'now')
+    nowSpy.mockReturnValue(1_000)
+
+    const wrapper = mount(App)
+    const client = await connectAndInitialize(wrapper)
+    openAdvancedPanel(wrapper)
+
+    nowSpy.mockReturnValue(1_000)
+    client.emitMessage({
+      method: 'item/started',
+      params: {
+        turnId: 'turn-tool-1',
+        item: {
+          type: 'commandExecution',
+          id: 'item-cmd-1',
+          callId: 'call-cmd-1',
+          command: 'echo tool-visibility',
+        },
+      },
+    })
+    nowSpy.mockReturnValue(1_200)
+    client.emitMessage({
+      method: 'item/commandExecution/outputDelta',
+      params: {
+        turnId: 'turn-tool-1',
+        itemId: 'item-cmd-1',
+        callId: 'call-cmd-1',
+        delta: 'stdout line\n',
+      },
+    })
+    nowSpy.mockReturnValue(1_400)
+    client.emitMessage({
+      method: 'item/completed',
+      params: {
+        turnId: 'turn-tool-1',
+        item: {
+          type: 'commandExecution',
+          id: 'item-cmd-1',
+          callId: 'call-cmd-1',
+          status: 'completed',
+          output: {
+            exitCode: 0,
+          },
+        },
+      },
+    })
+
+    nowSpy.mockReturnValue(2_000)
+    client.emitMessage({
+      method: 'item/started',
+      params: {
+        turnId: 'turn-tool-1',
+        item: {
+          type: 'fileChange',
+          id: 'item-file-1',
+          callId: 'call-file-1',
+          path: '/tmp/example.txt',
+        },
+      },
+    })
+    nowSpy.mockReturnValue(2_200)
+    client.emitMessage({
+      method: 'item/fileChange/outputDelta',
+      params: {
+        turnId: 'turn-tool-1',
+        itemId: 'item-file-1',
+        callId: 'call-file-1',
+        delta: 'file patched\n',
+      },
+    })
+    nowSpy.mockReturnValue(2_500)
+    client.emitMessage({
+      method: 'item/completed',
+      params: {
+        turnId: 'turn-tool-1',
+        item: {
+          type: 'fileChange',
+          id: 'item-file-1',
+          callId: 'call-file-1',
+          status: 'completed',
+          result: {
+            changedFiles: 1,
+          },
+        },
+      },
+    })
+
+    nowSpy.mockReturnValue(3_000)
+    client.emitMessage({
+      method: 'item/started',
+      params: {
+        turnId: 'turn-tool-1',
+        item: {
+          type: 'mcpToolCall',
+          id: 'item-mcp-1',
+          callId: 'call-mcp-1',
+          toolName: 'search_docs',
+          arguments: {
+            query: 'tool visibility',
+          },
+        },
+      },
+    })
+    nowSpy.mockReturnValue(3_400)
+    client.emitMessage({
+      method: 'item/mcpToolCall/progress',
+      params: {
+        turnId: 'turn-tool-1',
+        itemId: 'item-mcp-1',
+        callId: 'call-mcp-1',
+        toolName: 'search_docs',
+        message: 'querying docs',
+      },
+    })
+    nowSpy.mockReturnValue(3_800)
+    client.emitMessage({
+      method: 'item/completed',
+      params: {
+        turnId: 'turn-tool-1',
+        item: {
+          type: 'mcpToolCall',
+          id: 'item-mcp-1',
+          callId: 'call-mcp-1',
+          toolName: 'search_docs',
+          error: 'timeout',
+        },
+      },
+    })
+    await flushPromises()
+
+    expect(wrapper.findAll('[data-testid="tool-call-entry"]')).toHaveLength(3)
+    expect(wrapper.text()).toContain('Tool 実行')
+    expect(wrapper.text()).toContain('commandExecution')
+    expect(wrapper.text()).toContain('fileChange')
+    expect(wrapper.text()).toContain('search_docs')
+    expect(wrapper.text()).toContain('call-cmd-1')
+    expect(wrapper.text()).toContain('call-file-1')
+    expect(wrapper.text()).toContain('call-mcp-1')
+    expect(wrapper.text()).toContain('400 ms')
+    expect(wrapper.text()).toContain('500 ms')
+    expect(wrapper.text()).toContain('800 ms')
+    expect(wrapper.text()).not.toContain('Unhandled notification: item/commandExecution/outputDelta')
+    expect(wrapper.text()).not.toContain('Unhandled notification: item/fileChange/outputDelta')
+    expect(wrapper.text()).not.toContain('Unhandled notification: item/mcpToolCall/progress')
+
+    openAllToolCallEntries(wrapper)
+    await flushPromises()
+
+    expect(wrapper.text()).toContain('echo tool-visibility')
+    expect(wrapper.text()).toContain('stdout line')
+    expect(wrapper.text()).toContain('file patched')
+    expect(wrapper.text()).toContain('querying docs')
+    expect(wrapper.text()).toContain('timeout')
+
+    nowSpy.mockRestore()
+    wrapper.unmount()
+  })
+
+  it('creates separate tool entries when callId is reused across turns', async () => {
+    bridgeMock.setRequestHandler(async (method) => {
+      if (method === 'initialize') {
+        return { userAgent: 'mock-codex-agent' }
+      }
+
+      throw new Error(`Unexpected method: ${method}`)
+    })
+
+    const nowSpy = vi.spyOn(Date, 'now')
+    nowSpy.mockReturnValue(10_000)
+
+    const wrapper = mount(App)
+    const client = await connectAndInitialize(wrapper)
+    openAdvancedPanel(wrapper)
+
+    nowSpy.mockReturnValue(10_000)
+    client.emitMessage({
+      method: 'item/started',
+      params: {
+        turnId: 'turn-tool-a',
+        item: {
+          type: 'commandExecution',
+          id: 'item-call-reuse-a',
+          callId: 'call-shared',
+          command: 'echo first command',
+        },
+      },
+    })
+    nowSpy.mockReturnValue(10_300)
+    client.emitMessage({
+      method: 'item/completed',
+      params: {
+        turnId: 'turn-tool-a',
+        item: {
+          type: 'commandExecution',
+          id: 'item-call-reuse-a',
+          callId: 'call-shared',
+          status: 'completed',
+          output: { exitCode: 0 },
+        },
+      },
+    })
+
+    nowSpy.mockReturnValue(11_000)
+    client.emitMessage({
+      method: 'item/started',
+      params: {
+        turnId: 'turn-tool-b',
+        item: {
+          type: 'commandExecution',
+          id: 'item-call-reuse-b',
+          callId: 'call-shared',
+          command: 'echo second command',
+        },
+      },
+    })
+    nowSpy.mockReturnValue(11_200)
+    client.emitMessage({
+      method: 'item/commandExecution/outputDelta',
+      params: {
+        turnId: 'turn-tool-b',
+        itemId: 'item-call-reuse-b',
+        callId: 'call-shared',
+        delta: 'second turn delta\n',
+      },
+    })
+    await flushPromises()
+
+    expect(wrapper.findAll('[data-testid="tool-call-entry"]')).toHaveLength(2)
+    expect(wrapper.findAll('[data-testid="tool-call-status"]').map((entry) => entry.text())).toEqual([
+      'inProgress',
+      'completed',
+    ])
+
+    openAllToolCallEntries(wrapper)
+    await flushPromises()
+
+    const entryTexts = wrapper.findAll('[data-testid="tool-call-entry"]').map((entry) => entry.text())
+    expect(entryTexts.some((text) => text.includes('turn-tool-a') && text.includes('echo first command'))).toBe(true)
+    expect(
+      entryTexts.some(
+        (text) =>
+          text.includes('turn-tool-b') &&
+          text.includes('echo second command') &&
+          text.includes('second turn delta'),
+      ),
+    ).toBe(true)
+
+    nowSpy.mockRestore()
+    wrapper.unmount()
+  })
+
+  it('keeps terminal tool status when delayed outputDelta and progress arrive', async () => {
+    bridgeMock.setRequestHandler(async (method) => {
+      if (method === 'initialize') {
+        return { userAgent: 'mock-codex-agent' }
+      }
+
+      throw new Error(`Unexpected method: ${method}`)
+    })
+
+    const nowSpy = vi.spyOn(Date, 'now')
+    nowSpy.mockReturnValue(20_000)
+
+    const wrapper = mount(App)
+    const client = await connectAndInitialize(wrapper)
+    openAdvancedPanel(wrapper)
+
+    nowSpy.mockReturnValue(20_000)
+    client.emitMessage({
+      method: 'item/started',
+      params: {
+        turnId: 'turn-terminal-cmd',
+        item: {
+          type: 'commandExecution',
+          id: 'item-terminal-cmd',
+          callId: 'call-terminal-cmd',
+          command: 'echo terminal command',
+        },
+      },
+    })
+    nowSpy.mockReturnValue(20_300)
+    client.emitMessage({
+      method: 'item/completed',
+      params: {
+        turnId: 'turn-terminal-cmd',
+        item: {
+          type: 'commandExecution',
+          id: 'item-terminal-cmd',
+          callId: 'call-terminal-cmd',
+          status: 'completed',
+          output: { exitCode: 0 },
+        },
+      },
+    })
+    nowSpy.mockReturnValue(20_500)
+    client.emitMessage({
+      method: 'item/commandExecution/outputDelta',
+      params: {
+        turnId: 'turn-terminal-cmd',
+        itemId: 'item-terminal-cmd',
+        callId: 'call-terminal-cmd',
+        delta: 'late command output\n',
+      },
+    })
+
+    nowSpy.mockReturnValue(21_000)
+    client.emitMessage({
+      method: 'item/started',
+      params: {
+        turnId: 'turn-terminal-mcp',
+        item: {
+          type: 'mcpToolCall',
+          id: 'item-terminal-mcp',
+          callId: 'call-terminal-mcp',
+          toolName: 'late_progress_tool',
+          arguments: { query: 'status guard' },
+        },
+      },
+    })
+    nowSpy.mockReturnValue(21_300)
+    client.emitMessage({
+      method: 'item/completed',
+      params: {
+        turnId: 'turn-terminal-mcp',
+        item: {
+          type: 'mcpToolCall',
+          id: 'item-terminal-mcp',
+          callId: 'call-terminal-mcp',
+          toolName: 'late_progress_tool',
+          error: 'network timeout',
+        },
+      },
+    })
+    nowSpy.mockReturnValue(21_500)
+    client.emitMessage({
+      method: 'item/mcpToolCall/progress',
+      params: {
+        turnId: 'turn-terminal-mcp',
+        itemId: 'item-terminal-mcp',
+        callId: 'call-terminal-mcp',
+        toolName: 'late_progress_tool',
+        message: 'late progress message',
+      },
+    })
+    await flushPromises()
+
+    expect(wrapper.findAll('[data-testid="tool-call-entry"]')).toHaveLength(2)
+    const statuses = wrapper.findAll('[data-testid="tool-call-status"]').map((entry) => entry.text())
+    expect(statuses).toContain('completed')
+    expect(statuses).toContain('failed')
+    expect(statuses).not.toContain('inProgress')
+
+    openAllToolCallEntries(wrapper)
+    await flushPromises()
+
+    const commandEntry = wrapper
+      .findAll('[data-testid="tool-call-entry"]')
+      .find((entry) => entry.text().includes('commandExecution'))
+    expect(commandEntry).toBeDefined()
+    expect(commandEntry?.text()).toContain('300 ms')
+    expect(commandEntry?.text()).toContain('late command output')
+
+    const mcpEntry = wrapper
+      .findAll('[data-testid="tool-call-entry"]')
+      .find((entry) => entry.text().includes('late_progress_tool'))
+    expect(mcpEntry).toBeDefined()
+    expect(mcpEntry?.text()).toContain('300 ms')
+    expect(mcpEntry?.text()).toContain('late progress message')
 
     nowSpy.mockRestore()
     wrapper.unmount()

@@ -23,6 +23,11 @@ import type {
   LogEntry,
   ModelOption,
   ThreadHistoryEntry,
+  ToolCallEntry,
+  ToolCallEvent,
+  ToolCallStatus,
+  ToolUserInputQuestion,
+  ToolUserInputRequest,
   TurnStatus,
   UiMessage,
   UserGuidance,
@@ -31,6 +36,42 @@ import type {
 
 const DEFAULT_WS_URL = 'ws://127.0.0.1:8787/bridge'
 const MAX_THREAD_HISTORY_ENTRIES = 50
+const MAX_TOOL_CALL_ENTRIES = 100
+const MAX_TOOL_CALL_EVENTS = 40
+
+type ToolItemType = 'commandExecution' | 'fileChange' | 'mcpToolCall'
+type ToolUserInputAnswers = Record<string, { answers: string[] }>
+
+function normalizeToolItemType(value: unknown): ToolItemType | null {
+  if (value === 'commandExecution' || value === 'fileChange' || value === 'mcpToolCall') {
+    return value
+  }
+
+  return null
+}
+
+function toToolCallKey(kind: 'callId' | 'itemId', value: string, turnId?: string): string {
+  if (turnId && turnId.trim().length > 0) {
+    return `${kind}:turn:${turnId}:value:${value}`
+  }
+
+  return `${kind}:value:${value}`
+}
+
+function parseToolStatus(value: unknown): ToolCallStatus | null {
+  if (value === 'inProgress' || value === 'completed' || value === 'failed') {
+    return value
+  }
+  if (value === 'error') {
+    return 'failed'
+  }
+
+  return null
+}
+
+function isTerminalToolStatus(status: ToolCallStatus): boolean {
+  return status === 'completed' || status === 'failed'
+}
 
 function parseUpdatedAtMs(updatedAt?: string): number | null {
   if (typeof updatedAt !== 'string' || updatedAt.trim().length === 0) {
@@ -132,6 +173,8 @@ export function useBridgeClient() {
 
   const messages = ref<UiMessage[]>([])
   const logs = ref<LogEntry[]>([])
+  const toolCalls = ref<ToolCallEntry[]>([])
+  const toolUserInputRequests = ref<ToolUserInputRequest[]>([])
   const approvals = ref<ApprovalRequest[]>([])
   const appStartedAtMs = Date.now()
   const firstSendDurationMs = ref<number | null>(null)
@@ -145,9 +188,12 @@ export function useBridgeClient() {
   const client = ref<BridgeRpcClient | null>(null)
   const assistantMessageIndexByItemId = new Map<string, number>()
   const approvalRequestedAtMsById = new Map<string, number>()
+  const toolCallEntryIdByLookupKey = new Map<string, string>()
 
   let uiMessageSequence = 1
   let logSequence = 1
+  let toolCallSequence = 1
+  let toolCallEventSequence = 1
 
   // Computed
   const isConnected = computed(() => connectionState.value === 'connected')
@@ -182,6 +228,7 @@ export function useBridgeClient() {
   const canQuickStartConversation = computed(
     () => connectionState.value !== 'connecting' && !quickStartInProgress.value && !isTurnActive.value,
   )
+  const currentToolUserInputRequest = computed(() => toolUserInputRequests.value[0] ?? null)
   const currentApproval = computed(() => approvals.value[0] ?? null)
   const historyResumeSuccessRate = computed(() =>
     historyResumeAttemptCount.value === 0
@@ -270,9 +317,295 @@ export function useBridgeClient() {
     }
   }
 
+  function clearToolCalls(): void {
+    toolCalls.value = []
+    toolCallEntryIdByLookupKey.clear()
+  }
+
+  function buildToolCallLookupKeys(callId?: string, itemId?: string, turnId?: string): string[] {
+    const keys: string[] = []
+    const normalizedTurnId = turnId?.trim()
+    const appendKey = (key: string): void => {
+      if (!keys.includes(key)) {
+        keys.push(key)
+      }
+    }
+    if (itemId) {
+      if (normalizedTurnId) {
+        appendKey(toToolCallKey('itemId', itemId, normalizedTurnId))
+      }
+      appendKey(toToolCallKey('itemId', itemId))
+    }
+    if (callId) {
+      if (normalizedTurnId) {
+        appendKey(toToolCallKey('callId', callId, normalizedTurnId))
+      }
+    }
+    return keys
+  }
+
+  function findToolCallEntryIndexById(entryId: string): number {
+    return toolCalls.value.findIndex((entry) => entry.id === entryId)
+  }
+
+  function removeLookupKeysForEntry(entry: ToolCallEntry): void {
+    const keys = buildToolCallLookupKeys(entry.callId, entry.itemId, entry.turnId)
+    for (const key of keys) {
+      if (toolCallEntryIdByLookupKey.get(key) === entry.id) {
+        toolCallEntryIdByLookupKey.delete(key)
+      }
+    }
+  }
+
+  function registerLookupKeysForEntry(entry: ToolCallEntry): void {
+    const keys = buildToolCallLookupKeys(entry.callId, entry.itemId, entry.turnId)
+    for (const key of keys) {
+      toolCallEntryIdByLookupKey.set(key, entry.id)
+    }
+  }
+
+  function pruneToolCalls(): void {
+    while (toolCalls.value.length > MAX_TOOL_CALL_ENTRIES) {
+      const removedEntry = toolCalls.value.pop()
+      if (!removedEntry) {
+        return
+      }
+      removeLookupKeysForEntry(removedEntry)
+    }
+  }
+
+  function appendToolCallEvent(
+    entry: ToolCallEntry,
+    method: string,
+    summary: string,
+    payload?: unknown,
+    timestampMs = Date.now(),
+  ): void {
+    const event: ToolCallEvent = {
+      id: toolCallEventSequence,
+      timestamp: new Date(timestampMs).toISOString(),
+      method,
+      summary,
+      payload,
+    }
+    toolCallEventSequence += 1
+    entry.events.push(event)
+    if (entry.events.length > MAX_TOOL_CALL_EVENTS) {
+      entry.events.splice(0, entry.events.length - MAX_TOOL_CALL_EVENTS)
+    }
+  }
+
+  function getOrCreateToolCallEntry(
+    toolName: string,
+    callId?: string,
+    itemId?: string,
+    turnId?: string,
+    timestampMs = Date.now(),
+  ): ToolCallEntry {
+    const lookupKeys = buildToolCallLookupKeys(callId, itemId, turnId)
+    for (const key of lookupKeys) {
+      const mappedEntryId = toolCallEntryIdByLookupKey.get(key)
+      if (!mappedEntryId) {
+        continue
+      }
+      const mappedIndex = findToolCallEntryIndexById(mappedEntryId)
+      if (mappedIndex >= 0) {
+        const mappedEntry = toolCalls.value[mappedIndex]
+        if (mappedEntry) {
+          return mappedEntry
+        }
+      }
+      toolCallEntryIdByLookupKey.delete(key)
+    }
+
+    const entry: ToolCallEntry = {
+      id: `tool-${toolCallSequence}`,
+      toolName,
+      callId,
+      itemId,
+      turnId,
+      status: 'inProgress',
+      outputText: '',
+      startedAt: new Date(timestampMs).toISOString(),
+      events: [],
+    }
+    toolCallSequence += 1
+    toolCalls.value.unshift(entry)
+
+    registerLookupKeysForEntry(entry)
+    pruneToolCalls()
+    return entry
+  }
+
+  function updateToolCallEntry(options: {
+    method: string
+    toolName: string
+    summary: string
+    callId?: string
+    itemId?: string
+    turnId?: string
+    input?: unknown
+    output?: unknown
+    outputDelta?: string
+    status?: ToolCallStatus
+    payload?: unknown
+  }): void {
+    const nowMs = Date.now()
+    const entry = getOrCreateToolCallEntry(
+      options.toolName,
+      options.callId,
+      options.itemId,
+      options.turnId,
+      nowMs,
+    )
+    let refreshLookupKeys = false
+
+    if (!entry.callId && options.callId) {
+      entry.callId = options.callId
+      refreshLookupKeys = true
+    }
+    if (!entry.itemId && options.itemId) {
+      entry.itemId = options.itemId
+      refreshLookupKeys = true
+    }
+    if (!entry.turnId && options.turnId) {
+      entry.turnId = options.turnId
+      refreshLookupKeys = true
+    }
+    if (!entry.toolName && options.toolName) {
+      entry.toolName = options.toolName
+    }
+    if (refreshLookupKeys) {
+      registerLookupKeysForEntry(entry)
+    }
+    if (entry.input === undefined && options.input !== undefined) {
+      entry.input = options.input
+    }
+    if (options.output !== undefined) {
+      entry.output = options.output
+    }
+    if (typeof options.outputDelta === 'string' && options.outputDelta.length > 0) {
+      entry.outputText += options.outputDelta
+    }
+
+    if (options.status) {
+      if (options.status === 'inProgress' && isTerminalToolStatus(entry.status)) {
+        appendToolCallEvent(entry, options.method, options.summary, options.payload, nowMs)
+        return
+      }
+
+      entry.status = options.status
+      if (options.status === 'inProgress') {
+        entry.completedAt = undefined
+        entry.durationMs = undefined
+      } else {
+        entry.completedAt = new Date(nowMs).toISOString()
+        const startedAtMs = Date.parse(entry.startedAt)
+        if (!Number.isNaN(startedAtMs)) {
+          entry.durationMs = Math.max(0, nowMs - startedAtMs)
+        }
+      }
+    }
+
+    appendToolCallEvent(entry, options.method, options.summary, options.payload, nowMs)
+  }
+
+  function extractToolOutputDelta(params: Record<string, unknown>): string {
+    return (
+      pickStringValue(params, ['delta', 'outputDelta', 'output', 'message']) ??
+      (typeof params.content === 'string' ? params.content : '')
+    )
+  }
+
+  function resolveToolCompletionStatus(item: Record<string, unknown>): ToolCallStatus {
+    if (item.error !== undefined) {
+      return 'failed'
+    }
+
+    const parsedStatus = parseToolStatus(item.status)
+    if (parsedStatus === 'failed') {
+      return 'failed'
+    }
+
+    return 'completed'
+  }
+
+function resolveToolName(toolType: ToolItemType, payload: Record<string, unknown>): string {
+  return (
+    pickStringValue(payload, ['toolName', 'tool', 'name']) ??
+    (toolType === 'mcpToolCall' ? 'mcpToolCall' : toolType)
+  )
+}
+
+function normalizeToolQuestionId(value: string, index: number): string {
+  const trimmed = value.trim()
+  if (trimmed.length > 0) {
+    return trimmed
+  }
+
+  return `question_${index + 1}`
+}
+
+function parseToolUserInputQuestions(params: Record<string, unknown>): ToolUserInputQuestion[] {
+  const questionsSource = Array.isArray(params.questions)
+    ? params.questions
+    : Array.isArray(params.items)
+      ? params.items
+      : []
+  const questions: ToolUserInputQuestion[] = []
+  const usedIds = new Set<string>()
+
+  for (let index = 0; index < questionsSource.length; index += 1) {
+    const rawQuestion = questionsSource[index]
+    if (!isRecord(rawQuestion)) {
+      continue
+    }
+
+    const baseQuestionId = normalizeToolQuestionId(
+      pickStringValue(rawQuestion, ['questionId', 'id', 'name', 'key']) ?? '',
+      index,
+    )
+    let questionId = baseQuestionId
+    let duplicateSuffix = 2
+    while (usedIds.has(questionId)) {
+      questionId = `${baseQuestionId}_${duplicateSuffix}`
+      duplicateSuffix += 1
+    }
+    usedIds.add(questionId)
+
+    const label =
+      pickStringValue(rawQuestion, ['label', 'question', 'title', 'prompt', 'text']) ?? `質問 ${index + 1}`
+    questions.push({
+      id: questionId,
+      label,
+      description: pickStringValue(rawQuestion, ['description', 'helpText', 'help', 'hint']) ?? undefined,
+      placeholder: pickStringValue(rawQuestion, ['placeholder']) ?? undefined,
+      defaultValue:
+        pickStringValue(rawQuestion, ['defaultValue', 'default', 'value', 'initialValue']) ?? undefined,
+    })
+  }
+
+  if (questions.length > 0) {
+    return questions
+  }
+
+  const fallbackLabel =
+    pickStringValue(params, ['prompt', 'message', 'question', 'title']) ?? '追加情報を入力してください'
+  return [
+    {
+      id: 'response',
+      label: fallbackLabel,
+      description: pickStringValue(params, ['description', 'hint']) ?? undefined,
+      placeholder: pickStringValue(params, ['placeholder']) ?? undefined,
+      defaultValue: pickStringValue(params, ['defaultValue', 'default']) ?? undefined,
+    },
+  ]
+}
+
   function resetConversation(): void {
     messages.value = []
     assistantMessageIndexByItemId.clear()
+    clearToolCalls()
     currentTurnId.value = ''
     turnStatus.value = 'idle'
   }
@@ -436,6 +769,7 @@ export function useBridgeClient() {
         resumeThreadId.value = ''
         currentTurnId.value = ''
         turnStatus.value = 'idle'
+        clearToolCalls()
         if (hadActiveThread) {
           setUserGuidance(
             'warn',
@@ -459,6 +793,72 @@ export function useBridgeClient() {
   }
 
   function handleServerRequest(id: JsonRpcId, method: string, params: unknown): void {
+    if (method === 'item/tool/call') {
+      const requestParams = isRecord(params) ? params : {}
+      const callId = pickStringValue(requestParams, ['callId', 'call_id']) ?? undefined
+      const turnId = pickStringValue(requestParams, ['turnId']) ?? undefined
+      const toolName = pickStringValue(requestParams, ['tool', 'toolName', 'name']) ?? 'tool/call'
+      const result = {
+        success: false,
+        contentItems: [
+          {
+            type: 'text',
+            text: `Client cannot execute dynamic tool call "${toolName}".`,
+          },
+        ],
+      }
+
+      updateToolCallEntry({
+        method,
+        toolName,
+        summary: `${toolName} request responded with failure`,
+        callId,
+        turnId,
+        input: requestParams,
+        output: result,
+        status: 'failed',
+        payload: requestParams,
+      })
+      client.value?.respond(id, result)
+      pushLog('rpc', 'warn', `Tool call failed on client: ${toolName}`, {
+        requestId: id,
+        callId: callId ?? null,
+        turnId: turnId ?? null,
+      })
+      return
+    }
+
+    if (method === 'item/tool/requestUserInput') {
+      const requestParams = isRecord(params) ? params : {}
+      const toolName = pickStringValue(requestParams, ['tool', 'toolName', 'name']) ?? 'tool/requestUserInput'
+      const request: ToolUserInputRequest = {
+        id,
+        method: 'item/tool/requestUserInput',
+        callId: pickStringValue(requestParams, ['callId', 'call_id']) ?? undefined,
+        turnId: pickStringValue(requestParams, ['turnId']) ?? undefined,
+        toolName,
+        questions: parseToolUserInputQuestions(requestParams),
+        params: requestParams,
+      }
+
+      toolUserInputRequests.value.push(request)
+      updateToolCallEntry({
+        method,
+        toolName,
+        summary: `${toolName} requested user input`,
+        callId: request.callId,
+        turnId: request.turnId,
+        input: requestParams,
+        status: 'inProgress',
+        payload: requestParams,
+      })
+      pushLog('rpc', 'info', `Tool user input request queued: ${toolName}`, {
+        requestId: id,
+        questionCount: request.questions.length,
+      })
+      return
+    }
+
     const approvalRequest = createApprovalRequest(id, method, params)
     if (!approvalRequest) {
       pushLog('rpc', 'warn', `Unsupported server request: ${method}`, params)
@@ -520,8 +920,32 @@ export function useBridgeClient() {
 
     if (method === 'item/started' && isRecord(params) && isRecord(params.item)) {
       const item = params.item
+      const turnId = pickStringValue(params, ['turnId']) ?? undefined
       if (item.type === 'agentMessage' && typeof item.id === 'string') {
-        ensureAssistantMessage(item.id, typeof params.turnId === 'string' ? params.turnId : undefined)
+        ensureAssistantMessage(item.id, turnId)
+      }
+
+      const toolItemType = normalizeToolItemType(item.type)
+      if (toolItemType) {
+        const callId = pickStringValue(item, ['callId', 'call_id']) ?? pickStringValue(params, ['callId', 'call_id'])
+        const itemId = pickStringValue(item, ['id', 'itemId', 'item_id']) ?? pickStringValue(params, ['itemId', 'item_id'])
+        const toolName = resolveToolName(toolItemType, item)
+        updateToolCallEntry({
+          method,
+          toolName,
+          summary: `${toolName} started`,
+          callId: callId ?? undefined,
+          itemId: itemId ?? undefined,
+          turnId,
+          status: 'inProgress',
+          input: item,
+          payload: params,
+        })
+        pushLog('rpc', 'info', `Tool started: ${toolName}`, {
+          callId: callId ?? null,
+          itemId: itemId ?? null,
+          turnId: turnId ?? null,
+        })
       }
       return
     }
@@ -537,10 +961,99 @@ export function useBridgeClient() {
       return
     }
 
+    if (
+      (method === 'item/commandExecution/outputDelta' || method === 'item/fileChange/outputDelta') &&
+      isRecord(params)
+    ) {
+      const toolItemType: ToolItemType =
+        method === 'item/commandExecution/outputDelta' ? 'commandExecution' : 'fileChange'
+      const callId = pickStringValue(params, ['callId', 'call_id']) ?? undefined
+      const itemId = pickStringValue(params, ['itemId', 'item_id']) ?? undefined
+      const turnId = pickStringValue(params, ['turnId']) ?? undefined
+      const outputDelta = extractToolOutputDelta(params)
+      const toolName = resolveToolName(toolItemType, params)
+      updateToolCallEntry({
+        method,
+        toolName,
+        summary: `${toolName} output`,
+        callId,
+        itemId,
+        turnId,
+        status: 'inProgress',
+        outputDelta,
+        output: params,
+        payload: params,
+      })
+      pushLog('rpc', 'info', `${method} received`, {
+        callId: callId ?? null,
+        itemId: itemId ?? null,
+      })
+      return
+    }
+
+    if (method === 'item/mcpToolCall/progress' && isRecord(params)) {
+      const callId = pickStringValue(params, ['callId', 'call_id']) ?? undefined
+      const itemId = pickStringValue(params, ['itemId', 'item_id']) ?? undefined
+      const turnId = pickStringValue(params, ['turnId']) ?? undefined
+      const outputDelta = extractToolOutputDelta(params)
+      const status = parseToolStatus(params.status)
+      const toolName = resolveToolName('mcpToolCall', params)
+
+      updateToolCallEntry({
+        method,
+        toolName,
+        summary: `${toolName} progress`,
+        callId,
+        itemId,
+        turnId,
+        status: status ?? 'inProgress',
+        outputDelta,
+        output: params,
+        payload: params,
+      })
+      pushLog('rpc', status === 'failed' ? 'warn' : 'info', `${method} received`, {
+        callId: callId ?? null,
+        itemId: itemId ?? null,
+        status: status ?? 'inProgress',
+      })
+      return
+    }
+
     if (method === 'item/completed' && isRecord(params) && isRecord(params.item)) {
       const item = params.item
       if (item.type === 'agentMessage') {
         completeAssistantItem(item, typeof params.turnId === 'string' ? params.turnId : undefined)
+      }
+
+      const toolItemType = normalizeToolItemType(item.type)
+      if (toolItemType) {
+        const callId = pickStringValue(item, ['callId', 'call_id']) ?? pickStringValue(params, ['callId', 'call_id'])
+        const itemId = pickStringValue(item, ['id', 'itemId', 'item_id']) ?? pickStringValue(params, ['itemId', 'item_id'])
+        const turnId = pickStringValue(params, ['turnId']) ?? undefined
+        const toolName = resolveToolName(toolItemType, item)
+        const status = resolveToolCompletionStatus(item)
+        const output =
+          item.result !== undefined
+            ? item.result
+            : item.output !== undefined
+              ? item.output
+              : item
+        updateToolCallEntry({
+          method,
+          toolName,
+          summary: `${toolName} completed (${status})`,
+          callId: callId ?? undefined,
+          itemId: itemId ?? undefined,
+          turnId,
+          status,
+          output,
+          payload: params,
+        })
+        pushLog('rpc', status === 'failed' ? 'warn' : 'info', `Tool completed: ${toolName} (${status})`, {
+          callId: callId ?? null,
+          itemId: itemId ?? null,
+          turnId: turnId ?? null,
+        })
       }
       return
     }
@@ -594,6 +1107,7 @@ export function useBridgeClient() {
     initialized.value = false
     userAgent.value = ''
     approvals.value = []
+    toolUserInputRequests.value = []
     approvalRequestedAtMsById.clear()
     bridgeCwd.value = ''
     connectionState.value = 'disconnected'
@@ -1016,6 +1530,104 @@ export function useBridgeClient() {
     }
   }
 
+  function normalizeToolUserInputAnswers(
+    request: ToolUserInputRequest,
+    answers: Record<string, { answers: string[] } | string[] | unknown>,
+  ): ToolUserInputAnswers {
+    const normalized: ToolUserInputAnswers = {}
+
+    for (const question of request.questions) {
+      const raw = answers[question.id]
+      let rawAnswerList: unknown[] = []
+      if (Array.isArray(raw)) {
+        rawAnswerList = raw
+      } else if (isRecord(raw) && Array.isArray(raw.answers)) {
+        rawAnswerList = raw.answers
+      }
+
+      const value = rawAnswerList
+        .filter((entry): entry is string => typeof entry === 'string')
+        .map((entry) => entry.trim())
+        .filter((entry) => entry.length > 0)
+      normalized[question.id] = {
+        answers: value,
+      }
+    }
+
+    return normalized
+  }
+
+  function respondToToolUserInput(answers: Record<string, { answers: string[] } | string[] | unknown>): void {
+    if (!client.value) {
+      return
+    }
+
+    const [request, ...remaining] = toolUserInputRequests.value
+    if (!request) {
+      return
+    }
+
+    const normalizedAnswers = normalizeToolUserInputAnswers(request, answers)
+    const result = {
+      answers: normalizedAnswers,
+    }
+    client.value.respond(request.id, result)
+    toolUserInputRequests.value = remaining
+    updateToolCallEntry({
+      method: `${request.method}/response`,
+      toolName: request.toolName,
+      summary: `${request.toolName} user input submitted`,
+      callId: request.callId,
+      turnId: request.turnId,
+      output: result,
+      status: 'completed',
+      payload: result,
+    })
+    pushLog('rpc', 'info', `Tool user input submitted: ${request.toolName}`, {
+      requestId: request.id,
+    })
+  }
+
+  function cancelToolUserInputRequest(): void {
+    if (!client.value) {
+      return
+    }
+
+    const [request, ...remaining] = toolUserInputRequests.value
+    if (!request) {
+      return
+    }
+
+    const answers: ToolUserInputAnswers = {}
+    for (const question of request.questions) {
+      answers[question.id] = {
+        answers: [],
+      }
+    }
+
+    const result = {
+      answers,
+    }
+    client.value.respond(request.id, result)
+    toolUserInputRequests.value = remaining
+    updateToolCallEntry({
+      method: `${request.method}/cancel`,
+      toolName: request.toolName,
+      summary: `${request.toolName} user input cancelled`,
+      callId: request.callId,
+      turnId: request.turnId,
+      output: {
+        ...result,
+        cancelled: true,
+      },
+      status: 'failed',
+      payload: result,
+    })
+    pushLog('rpc', 'warn', `Tool user input cancelled: ${request.toolName}`, {
+      requestId: request.id,
+    })
+  }
+
   function respondToApproval(decision: ApprovalDecision): void {
     if (!client.value) {
       return
@@ -1069,6 +1681,8 @@ export function useBridgeClient() {
     userGuidance,
     messages,
     logs,
+    toolCalls,
+    toolUserInputRequests,
     approvals,
     firstSendDurationMs,
     historyResumeAttemptCount,
@@ -1087,6 +1701,7 @@ export function useBridgeClient() {
     canInterruptTurn,
     canReadSelectedHistoryThread,
     canQuickStartConversation,
+    currentToolUserInputRequest,
     currentApproval,
     sendStateHint,
     currentApprovalExplanation,
@@ -1107,6 +1722,8 @@ export function useBridgeClient() {
     interruptTurn,
     loadModelList,
     loadConfig,
+    respondToToolUserInput,
+    cancelToolUserInputRequest,
     respondToApproval,
     stringifyDetails,
     formatHistoryUpdatedAt,

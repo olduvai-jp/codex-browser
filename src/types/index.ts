@@ -1,3 +1,5 @@
+import type { JsonRpcId } from '@/lib/bridgeRpcClient'
+
 export type { JsonRpcId } from '@/lib/bridgeRpcClient'
 export type { ApprovalDecision, ApprovalMethod, ApprovalRequest } from '@/lib/approvalRequests'
 
@@ -20,6 +22,50 @@ export type LogEntry = {
   scope: 'bridge' | 'rpc'
   message: string
   details?: string
+}
+
+export type ToolCallStatus = 'inProgress' | 'completed' | 'failed'
+
+export type ToolCallEvent = {
+  id: number
+  timestamp: string
+  method: string
+  summary: string
+  payload?: unknown
+}
+
+export type ToolCallEntry = {
+  id: string
+  toolName: string
+  callId?: string
+  itemId?: string
+  turnId?: string
+  status: ToolCallStatus
+  input?: unknown
+  output?: unknown
+  outputText: string
+  startedAt: string
+  completedAt?: string
+  durationMs?: number
+  events: ToolCallEvent[]
+}
+
+export type ToolUserInputQuestion = {
+  id: string
+  label: string
+  description?: string
+  placeholder?: string
+  defaultValue?: string
+}
+
+export type ToolUserInputRequest = {
+  id: JsonRpcId
+  method: 'item/tool/requestUserInput'
+  callId?: string
+  turnId?: string
+  toolName: string
+  questions: ToolUserInputQuestion[]
+  params: Record<string, unknown>
 }
 
 export type ThreadHistoryEntry = {

@@ -36,6 +36,7 @@ npm run dev
 ```
 
 `npm run dev` starts both frontend (Vite) and backend bridge server.
+It auto-selects a bridge port, starting from `8787`, and uses the same `BRIDGE_PORT` for both processes.
 
 You can also run each side separately:
 
@@ -43,6 +44,8 @@ You can also run each side separately:
 npm run dev:frontend
 npm run dev:backend
 ```
+
+When running separately, pass the same `BRIDGE_PORT` to both commands if you need a non-default port.
 
 The frontend resolves the bridge WebSocket URL automatically with this priority:
 
@@ -53,7 +56,7 @@ The frontend resolves the bridge WebSocket URL automatically with this priority:
 
 When using `npm run dev:frontend`, Vite proxies `/bridge` websocket traffic to `ws://127.0.0.1:${BRIDGE_PORT:-8787}`, so priority 3 works in local development as well.
 
-If port `8787` is already in use, start with another bridge port:
+To force a specific bridge port instead of auto-selection, set `BRIDGE_PORT` explicitly:
 
 ```sh
 BRIDGE_PORT=8788 npm run dev

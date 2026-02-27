@@ -13,12 +13,26 @@ export function formatHistoryUpdatedAt(value?: string): string {
     return '-'
   }
 
-  const parsed = new Date(value)
+  const normalized = value.trim()
+  const unixTimeMatch = normalized.match(/^\d{10,16}$/)
+  const unixTime = unixTimeMatch ? Number.parseInt(unixTimeMatch[0], 10) : Number.NaN
+  const unixTimeMs = Number.isFinite(unixTime)
+    ? unixTime >= 1_000_000_000_000
+      ? unixTime
+      : unixTime * 1000
+    : Number.NaN
+  const parsed = Number.isFinite(unixTimeMs) ? new Date(unixTimeMs) : new Date(normalized)
   if (Number.isNaN(parsed.getTime())) {
     return value
   }
 
-  return parsed.toLocaleString()
+  return parsed.toLocaleString('ja-JP', {
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit',
+    hour: '2-digit',
+    minute: '2-digit',
+  })
 }
 
 export function stringifyDetails(value: unknown): string {

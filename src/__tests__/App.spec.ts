@@ -103,9 +103,9 @@ function findRequestCall(method: string): { method: string; params: unknown } | 
   return bridgeMock.getRequestCalls().find((call) => call.method === method)
 }
 
-function getVisibleHistoryThreadIds(wrapper: VueWrapper<ComponentPublicInstance>): string[] {
+function getVisibleHistoryThreadLabels(wrapper: VueWrapper<ComponentPublicInstance>): string[] {
   return wrapper
-    .findAll('aside button p.font-mono')
+    .findAll('aside button p.text-sm.font-medium')
     .map((entry) => entry.text().trim())
     .filter((entry) => entry.length > 0)
 }
@@ -456,7 +456,7 @@ describe('App.vue ui phase-1 flows', () => {
                 thread: {
                   id: 'thread-history-1',
                   title: 'History Thread 1',
-                  updatedAt: '2026-02-17T12:00:00.000Z',
+                  updatedAt: '1739793600',
                   turns: [{}],
                 },
               },
@@ -517,10 +517,10 @@ describe('App.vue ui phase-1 flows', () => {
     await getByTestId(wrapper, 'history-refresh-button').trigger('click')
     await flushPromises()
 
-    expect(wrapper.text()).toContain('thread-history-1')
-    expect(wrapper.text()).toContain('thread-history-2')
+    expect(wrapper.text()).toContain('History Thread 1')
+    expect(wrapper.text()).toContain('History Thread 2')
     expect(wrapper.text()).toContain('更新:')
-    expect(wrapper.text()).toContain('ターン数: 1')
+    expect(wrapper.text()).not.toContain('1739793600')
     expect(getByTestId(wrapper, 'history-open-selected-button').attributes('disabled')).toBeUndefined()
 
     await getByTestId(wrapper, 'history-open-selected-button').trigger('click')
@@ -602,9 +602,9 @@ describe('App.vue ui phase-1 flows', () => {
     await getByTestId(wrapper, 'history-refresh-button').trigger('click')
     await flushPromises()
 
-    const historyIdsWithMatch = getVisibleHistoryThreadIds(wrapper)
-    expect(historyIdsWithMatch).toHaveLength(50)
-    expect(historyIdsWithMatch.every((entry) => entry.startsWith('thread-matched-'))).toBe(true)
+    const historyLabelsWithMatch = getVisibleHistoryThreadLabels(wrapper)
+    expect(historyLabelsWithMatch).toHaveLength(50)
+    expect(historyLabelsWithMatch.every((entry) => entry.startsWith('Matched '))).toBe(true)
 
     client.emitMessage({
       type: 'bridge/status',
@@ -620,9 +620,9 @@ describe('App.vue ui phase-1 flows', () => {
     await getByTestId(wrapper, 'history-refresh-button').trigger('click')
     await flushPromises()
 
-    const historyIdsFallback = getVisibleHistoryThreadIds(wrapper)
-    expect(historyIdsFallback).toHaveLength(50)
-    expect(historyIdsFallback).toContain('thread-unmatched-1')
+    const historyLabelsFallback = getVisibleHistoryThreadLabels(wrapper)
+    expect(historyLabelsFallback).toHaveLength(50)
+    expect(historyLabelsFallback).toContain('Unmatched 1')
 
     wrapper.unmount()
   })

@@ -22,11 +22,9 @@ const emit = defineEmits<{
     :disabled="disabled"
     @click="emit('open', thread.id)"
   >
-    <p class="truncate text-sm font-medium text-text-primary">{{ thread.title }}</p>
-    <p class="mt-0.5 truncate font-mono text-xs text-text-tertiary">{{ thread.id }}</p>
-    <div class="mt-1 flex gap-3 text-xs text-text-tertiary">
+    <p class="truncate text-sm font-medium text-text-primary">{{ thread.title || thread.id }}</p>
+    <div class="mt-1 text-xs text-text-tertiary">
       <span>更新: {{ formatHistoryUpdatedAt(thread.updatedAt) }}</span>
-      <span v-if="typeof thread.turnCount === 'number'">ターン数: {{ thread.turnCount }}</span>
     </div>
   </button>
 </template>

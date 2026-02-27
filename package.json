@@ -4,7 +4,7 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "dev": "npm run dev:all",
+    "dev": "tsx scripts/dev-auto-port.ts",
     "dev:frontend": "vite",
     "dev:backend": "tsx server/bridge.ts",
     "dev:all": "run-p dev:frontend dev:backend",

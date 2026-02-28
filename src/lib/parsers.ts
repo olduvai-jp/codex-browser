@@ -1,6 +1,8 @@
 import { REASONING_EFFORT_VALUES, type JsonRpcId, type ModelOption, type ReasoningEffort, type ThreadHistoryEntry } from '@/types'
 
 const REASONING_EFFORT_SET = new Set<string>(REASONING_EFFORT_VALUES)
+const THREAD_TITLE_CANDIDATE_KEYS = ['title', 'name', 'summary', 'preview']
+const UUID_STRING_PATTERN = /^(?:[0-9a-f]{32}|[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})$/i
 
 export function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null
@@ -90,6 +92,47 @@ export function extractThreadFromReadResult(payload: unknown): Record<string, un
   return null
 }
 
+function isUuidString(value: string): boolean {
+  return UUID_STRING_PATTERN.test(value.trim())
+}
+
+function pickThreadTitleValue(source: Record<string, unknown>, keys: string[]): string | null {
+  for (const key of keys) {
+    const value = source[key]
+    if (typeof value === 'string') {
+      const normalizedValue = value.trim()
+      if (normalizedValue.length === 0 || isUuidString(normalizedValue)) {
+        continue
+      }
+      return value
+    }
+    if (typeof value === 'number' && Number.isFinite(value)) {
+      return String(value)
+    }
+  }
+  return null
+}
+
+function hasMergedTitlePriority(entry: ThreadHistoryEntry): boolean {
+  const normalizedTitle = entry.title.trim()
+  return normalizedTitle.length > 0 && normalizedTitle !== entry.id && !isUuidString(normalizedTitle)
+}
+
+function mergeThreadHistoryEntry(existing: ThreadHistoryEntry, incoming: ThreadHistoryEntry): ThreadHistoryEntry {
+  const existingHasTitle = hasMergedTitlePriority(existing)
+  const incomingHasTitle = hasMergedTitlePriority(incoming)
+  const title = !incomingHasTitle && existingHasTitle ? existing.title : incoming.title
+
+  return {
+    id: incoming.id,
+    title,
+    updatedAt: incoming.updatedAt ?? existing.updatedAt,
+    turnCount: incoming.turnCount ?? existing.turnCount,
+    cwd: incoming.cwd ?? existing.cwd,
+    source: incoming.source ?? existing.source,
+  }
+}
+
 export function normalizeThreadHistoryEntry(entry: unknown): ThreadHistoryEntry | null {
   if (typeof entry === 'string' && entry.trim().length > 0) {
     const id = entry.trim()
@@ -112,10 +155,7 @@ export function normalizeThreadHistoryEntry(entry: unknown): ThreadHistoryEntry 
     return null
   }
 
-  const title =
-    pickStringValue(base, ['title', 'name', 'summary'], { trim: false }) ??
-    pickStringValue(entry, ['title', 'name', 'summary'], { trim: false }) ??
-    id
+  const title = pickThreadTitleValue(base, THREAD_TITLE_CANDIDATE_KEYS) ?? pickThreadTitleValue(entry, THREAD_TITLE_CANDIDATE_KEYS) ?? id
   const updatedAt =
     pickStringValue(base, ['updatedAt', 'updated_at', 'lastUpdatedAt', 'lastUpdated']) ??
     pickStringValue(entry, ['updatedAt', 'updated_at', 'lastUpdatedAt', 'lastUpdated']) ??
@@ -153,6 +193,11 @@ export function parseThreadHistoryList(payload: unknown): ThreadHistoryEntry[] {
   for (const rawEntry of rawEntries) {
     const entry = normalizeThreadHistoryEntry(rawEntry)
     if (!entry) {
+      continue
+    }
+    const existingEntry = deduped.get(entry.id)
+    if (existingEntry) {
+      deduped.set(entry.id, mergeThreadHistoryEntry(existingEntry, entry))
       continue
     }
     deduped.set(entry.id, entry)

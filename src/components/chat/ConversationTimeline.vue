@@ -11,12 +11,6 @@ type TimelineToolCall = Extract<TimelineItem, { kind: 'tool' }>['toolCall']
 type TimelineApprovalEntry = Extract<TimelineItem, { kind: 'approval' }>
 type TimelineToolUserInputEntry = Extract<TimelineItem, { kind: 'toolUserInput' }>
 
-const roleLabel: Record<UiMessage['role'], string> = {
-  user: 'あなた',
-  assistant: 'アシスタント',
-  system: 'システム',
-}
-
 function formatTime(value?: string): string {
   if (typeof value !== 'string' || value.trim().length === 0) {
     return ''
@@ -231,7 +225,7 @@ function toolUserInputSummary(entry: TimelineToolUserInputEntry): string {
     return '入力内容の確認が必要です'
   }
   if (entry.questions.length === 1) {
-    return `入力項目 1件: ${entry.questions[0].label}`
+    return `入力項目 1件: ${entry.questions[0]?.label ?? ''}`
   }
 
   return `入力項目 ${entry.questions.length}件`
@@ -239,8 +233,8 @@ function toolUserInputSummary(entry: TimelineToolUserInputEntry): string {
 </script>
 
 <template>
-  <div class="messages flex flex-1 items-start overflow-y-auto px-4 py-7 sm:px-6" role="log" aria-live="polite">
-    <div class="mx-auto flex w-full max-w-5xl flex-col gap-2">
+  <div class="messages flex flex-1 items-start overflow-y-auto px-4 py-4 sm:px-6" role="log" aria-live="polite">
+    <div class="mx-auto flex w-full max-w-5xl flex-col gap-1">
       <p
         v-if="timelineItems.length === 0"
         class="rounded-2xl border border-dashed border-border-default bg-surface-secondary py-12 text-center text-sm text-text-tertiary"
@@ -254,7 +248,7 @@ function toolUserInputSummary(entry: TimelineToolUserInputEntry): string {
         class="timeline-item w-full"
         :class="
           entry.kind === 'message' && entry.message.role === 'user'
-            ? 'ml-auto max-w-[min(46rem,calc(100%-2rem))] rounded-2xl rounded-br-md border border-user-border bg-user-bubble px-3 py-2.5'
+            ? 'ml-auto max-w-[min(46rem,calc(100%-2rem))] rounded-2xl rounded-br-md border border-user-border bg-user-bubble px-3 py-2'
             : 'px-0 py-1'
         "
         data-testid="timeline-item"
@@ -263,21 +257,9 @@ function toolUserInputSummary(entry: TimelineToolUserInputEntry): string {
         :data-timeline-role="entry.kind === 'message' ? entry.message.role : undefined"
       >
         <template v-if="entry.kind === 'message'">
-          <div class="message flex flex-col gap-1.5" :class="`role-${entry.message.role}`">
-            <div class="flex flex-wrap items-center justify-between gap-x-3 gap-y-1 text-[11px] leading-5">
-              <div class="flex items-center gap-2">
-                <span
-                  class="rounded-full px-2 py-0.5 font-semibold"
-                  :class="
-                    entry.message.role === 'user'
-                      ? 'bg-accent/10 text-accent'
-                      : 'bg-surface-tertiary text-text-secondary'
-                  "
-                >
-                  {{ roleLabel[entry.message.role] ?? entry.message.role }}
-                </span>
-                <span v-if="entry.message.streaming" class="font-medium text-accent">生成中...</span>
-              </div>
+          <div class="message flex flex-col gap-1">
+            <div v-if="entry.message.streaming || formatTime(entry.message.createdAt)" class="flex flex-wrap items-center justify-between gap-x-3 gap-y-1 text-[11px] leading-4">
+              <span v-if="entry.message.streaming" class="font-medium text-accent">生成中...</span>
               <div class="flex items-center gap-2 text-text-muted">
                 <span v-if="formatTime(entry.message.createdAt)">{{ formatTime(entry.message.createdAt) }}</span>
               </div>
@@ -288,7 +270,7 @@ function toolUserInputSummary(entry: TimelineToolUserInputEntry): string {
             >
               {{ entry.message.summaryText }}
             </p>
-            <pre class="whitespace-pre-wrap break-words font-sans text-sm leading-6 text-text-primary">{{ entry.message.text || (entry.message.streaming ? '...' : '') }}</pre>
+            <pre class="whitespace-pre-wrap break-words font-sans text-sm leading-5 text-text-primary">{{ entry.message.text || (entry.message.streaming ? '...' : '') }}</pre>
           </div>
         </template>
 

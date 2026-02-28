@@ -59,7 +59,6 @@ const {
   resumeThread,
   sendTurn,
   interruptTurn,
-  loadModelList,
   setSelectedModelId,
   setSelectedThinkingEffort,
   loadConfig,
@@ -130,9 +129,7 @@ onMounted(() => {
           :selected-model-id="selectedModelId"
           :selected-thinking-effort="selectedThinkingEffort"
           :thinking-options="availableThinkingEfforts"
-          :can-load-model-list="isConnected && initialized"
           @update:model-value="messageInput = $event"
-          @load-model-list="loadModelList"
           @update:selected-model-id="setSelectedModelId"
           @update:selected-thinking-effort="setSelectedThinkingEffort"
           @send="sendTurn"

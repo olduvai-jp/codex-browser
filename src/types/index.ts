@@ -19,6 +19,8 @@ export type UiMessage = {
   id: string
   role: 'user' | 'assistant' | 'system'
   text: string
+  summaryText?: string
+  assistantUtteranceStarted: boolean
   itemId?: string
   turnId?: string
   streaming?: boolean

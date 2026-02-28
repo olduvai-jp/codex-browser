@@ -5,6 +5,15 @@ import MessageBubble from './MessageBubble.vue'
 defineProps<{
   messages: UiMessage[]
 }>()
+
+function shouldShowSummary(message: UiMessage): boolean {
+  return (
+    message.role === 'assistant' &&
+    typeof message.summaryText === 'string' &&
+    message.summaryText.length > 0 &&
+    !message.assistantUtteranceStarted
+  )
+}
 </script>
 
 <template>
@@ -14,11 +23,19 @@ defineProps<{
         まだメッセージはありません。
       </p>
 
-      <MessageBubble
+      <div
         v-for="entry in messages"
         :key="entry.id"
-        :message="entry"
-      />
+        class="flex w-full flex-col gap-2"
+      >
+        <p
+          v-if="shouldShowSummary(entry)"
+          class="assistant-summary mr-auto max-w-[min(52rem,calc(100%-1rem))] whitespace-pre-wrap break-words rounded-xl border border-border-default/70 bg-surface-secondary/70 px-4 py-2 text-sm leading-6 text-text-secondary"
+        >
+          {{ entry.summaryText }}
+        </p>
+        <MessageBubble :message="entry" />
+      </div>
     </div>
   </div>
 </template>

@@ -16,10 +16,40 @@ function resolveWebServerPort(): number {
   return Number.isInteger(parsed) && parsed > 0 ? parsed : 4173
 }
 
+type ScreenshotMode = 'off' | 'on' | 'only-on-failure'
+
+function resolveScreenshotMode(): ScreenshotMode {
+  const envValue = process.env.PW_SCREENSHOT_MODE?.trim()
+  const raw = envValue?.toLowerCase()
+  if (!raw) {
+    return 'off'
+  }
+
+  if (raw === '1' || raw === 'true' || raw === 'on') {
+    return 'on'
+  }
+
+  if (raw === '0' || raw === 'false' || raw === 'off') {
+    return 'off'
+  }
+
+  if (raw === 'only-on-failure') {
+    return 'only-on-failure'
+  }
+
+  // Warn once during config evaluation when env is set but invalid.
+  console.warn(
+    `[playwright.config] Invalid PW_SCREENSHOT_MODE="${envValue}". Falling back to "off". ` +
+      'Allowed values: off, on, only-on-failure (also accepts 0/1/false/true).',
+  )
+  return 'off'
+}
+
 const isCi = Boolean(process.env.CI)
 const usePreviewServer = isCi || isEnvEnabled('PW_USE_PREVIEW_SERVER')
 const webServerHost = process.env.PW_WEB_SERVER_HOST?.trim() || '127.0.0.1'
 const webServerPort = resolveWebServerPort()
+const screenshotMode = resolveScreenshotMode()
 const defaultWebServerCommand = usePreviewServer
   ? `npm run build-only && npm run preview -- --host ${webServerHost} --port ${webServerPort} --strictPort`
   : `npm run dev:frontend -- --host ${webServerHost} --port ${webServerPort} --strictPort`
@@ -63,6 +93,9 @@ export default defineConfig({
 
     /* Collect trace when retrying the failed test. See https://playwright.dev/docs/trace-viewer */
     trace: 'on-first-retry',
+
+    /* Collect screenshots based on PW_SCREENSHOT_MODE: off/on/only-on-failure */
+    screenshot: screenshotMode,
 
     /* Run all E2E tests in headless mode by default */
     headless: true,

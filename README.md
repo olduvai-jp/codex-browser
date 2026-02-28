@@ -91,6 +91,14 @@ npm run test:e2e -- --project=chromium
 npm run test:e2e -- tests/example.spec.ts
 # Runs the tests in debug mode
 npm run test:e2e -- --debug
+
+# Screenshot modes
+npm run test:e2e:screenshot        # always save screenshots
+npm run test:e2e:screenshot:fail   # save only on failure
+npm run test:e2e:screenshot:off    # explicitly disable screenshots
+
+# Or control via env var directly (cross-platform)
+npx cross-env PW_SCREENSHOT_MODE=only-on-failure npm run test:e2e
 ```
 
 ### Lint with [ESLint](https://eslint.org/)

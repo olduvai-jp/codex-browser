@@ -379,7 +379,7 @@ describe('App.vue ui phase-1 flows', () => {
     wrapper.unmount()
   })
 
-  it('shows reasoning summaryTextDelta in assistant bubble while streaming response', async () => {
+  it('shows reasoning summary outside bubble and hides it when assistant utterance starts with whitespace delta', async () => {
     bridgeMock.setRequestHandler(async (method) => {
       if (method === 'initialize') {
         return { userAgent: 'mock-codex-agent' }
@@ -433,6 +433,24 @@ describe('App.vue ui phase-1 flows', () => {
         },
       },
     })
+    await flushPromises()
+
+    let conversationTexts = wrapper.findAll('.message pre').map((entry) => entry.text())
+    expect(conversationTexts[conversationTexts.length - 1]).toBe('...')
+    expect(wrapper.findAll('.assistant-summary').map((entry) => entry.text())).toContain('Reasoning summary text')
+
+    client.emitMessage({
+      method: 'item/agentMessage/delta',
+      params: {
+        turnId: 'turn-reasoning-inline-1',
+        itemId: 'item-agent-inline-1',
+        delta: ' ',
+      },
+    })
+    await flushPromises()
+
+    expect(wrapper.find('.assistant-summary').exists()).toBe(false)
+
     client.emitMessage({
       method: 'item/agentMessage/delta',
       params: {
@@ -443,13 +461,14 @@ describe('App.vue ui phase-1 flows', () => {
     })
     await flushPromises()
 
-    const conversationTexts = wrapper.findAll('.message pre').map((entry) => entry.text())
-    expect(conversationTexts[conversationTexts.length - 1]).toBe('Reasoning summary text\n\nstreamed answer')
+    conversationTexts = wrapper.findAll('.message pre').map((entry) => entry.text())
+    expect(conversationTexts[conversationTexts.length - 1]).toContain('streamed answer')
+    expect(wrapper.find('.assistant-summary').exists()).toBe(false)
 
     wrapper.unmount()
   })
 
-  it('keeps reasoning summary after item/completed for agent message', async () => {
+  it('does not merge reasoning summary into assistant text after item/completed', async () => {
     bridgeMock.setRequestHandler(async (method) => {
       if (method === 'initialize') {
         return { userAgent: 'mock-codex-agent' }
@@ -537,14 +556,15 @@ describe('App.vue ui phase-1 flows', () => {
     await flushPromises()
 
     const conversationTexts = wrapper.findAll('.message pre').map((entry) => entry.text())
-    expect(conversationTexts[conversationTexts.length - 1]).toBe('Reasoning summary persisted\n\nfinal answer')
+    expect(conversationTexts[conversationTexts.length - 1]).toBe('final answer')
+    expect(wrapper.find('.assistant-summary').exists()).toBe(false)
     expect(wrapper.text()).not.toContain('Unhandled notification: item/reasoning/summaryTextDelta')
     expect(wrapper.text()).not.toContain('Unhandled notification: item/reasoning/summaryPartAdded')
 
     wrapper.unmount()
   })
 
-  it('applies reasoning summary when reasoning completion arrives after agentMessage completion', async () => {
+  it('keeps assistant text unchanged when reasoning completion arrives after agentMessage completion', async () => {
     bridgeMock.setRequestHandler(async (method) => {
       if (method === 'initialize') {
         return { userAgent: 'mock-codex-agent' }
@@ -624,7 +644,8 @@ describe('App.vue ui phase-1 flows', () => {
     await flushPromises()
 
     conversationTexts = wrapper.findAll('.message pre').map((entry) => entry.text())
-    expect(conversationTexts[conversationTexts.length - 1]).toBe('Late reasoning summary\n\nfinal answer first')
+    expect(conversationTexts[conversationTexts.length - 1]).toBe('final answer first')
+    expect(wrapper.find('.assistant-summary').exists()).toBe(false)
 
     wrapper.unmount()
   })
@@ -751,8 +772,9 @@ describe('App.vue ui phase-1 flows', () => {
     const conversationTexts = wrapper.findAll('.message pre').map((entry) => entry.text())
     expect(conversationTexts).toEqual([
       'Hydrated user message',
-      'Hydrated reasoning summary\n\nHydrated assistant reply',
+      'Hydrated assistant reply',
     ])
+    expect(wrapper.find('.assistant-summary').exists()).toBe(false)
 
     wrapper.unmount()
   })
@@ -1119,8 +1141,6 @@ describe('App.vue ui phase-1 flows', () => {
     await connectAndInitialize(wrapper)
 
     openAdvancedPanel(wrapper)
-    await getByTestId(wrapper, 'load-model-list-button').trigger('click')
-    await flushPromises()
 
     const modelOptions = wrapper
       .findAll('select[data-testid="model-select"] option')
@@ -1198,8 +1218,6 @@ describe('App.vue ui phase-1 flows', () => {
     const wrapper = mount(App)
     await connectAndInitialize(wrapper)
 
-    await getByTestId(wrapper, 'load-model-list-button').trigger('click')
-    await flushPromises()
     const modelSelect = wrapper.get('select[data-testid="model-select"]')
     expect(modelSelect.attributes('disabled')).toBeUndefined()
     await modelSelect.setValue('gpt-4o-mini')
@@ -1267,8 +1285,6 @@ describe('App.vue ui phase-1 flows', () => {
     await connectAndInitialize(wrapper)
 
     openAdvancedPanel(wrapper)
-    await getByTestId(wrapper, 'load-model-list-button').trigger('click')
-    await flushPromises()
     const modelSelect = wrapper.get('select[data-testid="model-select"]')
     expect(modelSelect.attributes('disabled')).toBeUndefined()
     await modelSelect.setValue('gpt-4o-mini')

@@ -20,7 +20,6 @@ function mountComposer() {
       selectedModelId: '',
       selectedThinkingEffort: '',
       thinkingOptions: ['none', 'minimal', 'low', 'medium', 'high', 'xhigh'],
-      canLoadModelList: true,
     },
   })
 }
@@ -51,13 +50,5 @@ describe('ChatComposer', () => {
 
     expect(wrapper.emitted('update:selectedModelId')).toEqual([['gpt-4o-mini']])
     expect(wrapper.emitted('update:selectedThinkingEffort')).toEqual([['high']])
-  })
-
-  it('emits load-model-list when refresh button is clicked', async () => {
-    const wrapper = mountComposer()
-
-    await wrapper.get('[data-testid="load-model-list-button"]').trigger('click')
-
-    expect(wrapper.emitted('load-model-list')).toHaveLength(1)
   })
 })

@@ -690,18 +690,6 @@ function parseToolUserInputQuestions(params: Record<string, unknown>): ToolUserI
   ]
 }
 
-  function composeAssistantDisplayText(summary: string, answer: string): string {
-    if (summary.length > 0 && answer.length > 0) {
-      return `${summary}\n\n${answer}`
-    }
-
-    if (summary.length > 0) {
-      return summary
-    }
-
-    return answer
-  }
-
   function normalizeTurnId(turnId?: string): string | null {
     if (typeof turnId !== 'string') {
       return null
@@ -798,11 +786,13 @@ function parseToolUserInputQuestions(params: Record<string, unknown>): ToolUserI
     return ''
   }
 
-  function composeAssistantTextForItem(itemId: string, turnId?: string): string {
+  function composeAssistantTextForItem(itemId: string): string {
+    return assistantAnswerByItemId.get(itemId) ?? ''
+  }
+
+  function composeAssistantSummaryForTurn(turnId?: string): string {
     const normalizedTurnId = normalizeTurnId(turnId)
-    const summary = normalizedTurnId ? reasoningSummaryByTurnId.get(normalizedTurnId) ?? '' : ''
-    const answer = assistantAnswerByItemId.get(itemId) ?? ''
-    return composeAssistantDisplayText(summary, answer)
+    return normalizedTurnId ? reasoningSummaryByTurnId.get(normalizedTurnId) ?? '' : ''
   }
 
   function refreshAssistantMessage(itemId: string, turnId?: string): void {
@@ -816,7 +806,9 @@ function parseToolUserInputQuestions(params: Record<string, unknown>): ToolUserI
     if (resolvedTurnId) {
       current.turnId = resolvedTurnId
     }
-    current.text = composeAssistantTextForItem(itemId, current.turnId)
+    current.text = composeAssistantTextForItem(itemId)
+    const summaryText = composeAssistantSummaryForTurn(current.turnId)
+    current.summaryText = summaryText.length > 0 ? summaryText : undefined
   }
 
   function refreshAssistantMessagesForTurn(turnId: string): void {
@@ -825,7 +817,9 @@ function parseToolUserInputQuestions(params: Record<string, unknown>): ToolUserI
         continue
       }
 
-      message.text = composeAssistantTextForItem(message.itemId, turnId)
+      message.text = composeAssistantTextForItem(message.itemId)
+      const summaryText = composeAssistantSummaryForTurn(turnId)
+      message.summaryText = summaryText.length > 0 ? summaryText : undefined
     }
   }
 
@@ -887,6 +881,9 @@ function parseToolUserInputQuestions(params: Record<string, unknown>): ToolUserI
       if (current && normalizedTurnId) {
         current.turnId = normalizedTurnId
       }
+      if (current && current.assistantUtteranceStarted !== true) {
+        current.assistantUtteranceStarted = false
+      }
       return existingIndex
     }
 
@@ -897,6 +894,8 @@ function parseToolUserInputQuestions(params: Record<string, unknown>): ToolUserI
       itemId,
       turnId: normalizedTurnId,
       text: '',
+      summaryText: normalizedTurnId ? composeAssistantSummaryForTurn(normalizedTurnId) || undefined : undefined,
+      assistantUtteranceStarted: false,
       streaming: true,
     })
 
@@ -918,6 +917,7 @@ function parseToolUserInputQuestions(params: Record<string, unknown>): ToolUserI
     }
 
     current.streaming = true
+    current.assistantUtteranceStarted = true
   }
 
   function completeAssistantItem(item: Record<string, unknown>, turnId?: string): void {
@@ -945,6 +945,9 @@ function parseToolUserInputQuestions(params: Record<string, unknown>): ToolUserI
     }
 
     current.streaming = false
+    if (text.length > 0) {
+      current.assistantUtteranceStarted = true
+    }
   }
 
   function hydrateMessagesFromThread(thread: Record<string, unknown>): void {
@@ -954,7 +957,6 @@ function parseToolUserInputQuestions(params: Record<string, unknown>): ToolUserI
     const newAssistantAnswerByItemId = new Map<string, string>()
     const newReasoningSummaryByTurnId = new Map<string, string>()
     const newReasoningTurnIdByItemId = new Map<string, string>()
-    const assistantAnswerByMessageIndex = new Map<number, string>()
 
     for (const turn of turns) {
       if (!isRecord(turn)) {
@@ -984,6 +986,7 @@ function parseToolUserInputQuestions(params: Record<string, unknown>): ToolUserI
               id: makeUiMessageId('user'),
               role: 'user',
               text,
+              assistantUtteranceStarted: false,
               turnId,
             })
           }
@@ -1007,8 +1010,7 @@ function parseToolUserInputQuestions(params: Record<string, unknown>): ToolUserI
                   continue
                 }
 
-                const answer = assistantAnswerByMessageIndex.get(assistantMessageIndex) ?? ''
-                assistantMessage.text = composeAssistantDisplayText(nextSummary, answer)
+                assistantMessage.summaryText = nextSummary
               }
             }
           }
@@ -1018,18 +1020,18 @@ function parseToolUserInputQuestions(params: Record<string, unknown>): ToolUserI
           const answerText = typeof item.text === 'string' ? item.text : ''
           const itemId = typeof item.id === 'string' ? item.id : undefined
           const summaryText = turnId ? newReasoningSummaryByTurnId.get(turnId) ?? '' : ''
-          const composedText = composeAssistantDisplayText(summaryText, answerText)
 
           hydratedMessages.push({
             id: makeUiMessageId('assistant'),
             role: 'assistant',
             itemId,
             turnId,
-            text: composedText,
+            text: answerText,
+            summaryText: summaryText.length > 0 ? summaryText : undefined,
+            assistantUtteranceStarted: answerText.length > 0,
             streaming: false,
           })
           const messageIndex = hydratedMessages.length - 1
-          assistantAnswerByMessageIndex.set(messageIndex, answerText)
           turnAssistantMessageIndices.push(messageIndex)
 
           if (itemId) {
@@ -1243,6 +1245,7 @@ function parseToolUserInputQuestions(params: Record<string, unknown>): ToolUserI
         id: makeUiMessageId('system'),
         role: 'system',
         text: `Turn ${turnId || '(unknown)'} completed with status: ${status}`,
+        assistantUtteranceStarted: false,
         turnId,
       })
       pushLog('rpc', status === 'completed' ? 'info' : 'warn', `Turn completed: ${status}`, params)
@@ -1522,6 +1525,7 @@ function parseToolUserInputQuestions(params: Record<string, unknown>): ToolUserI
       }
       initialized.value = true
       pushLog('rpc', 'info', 'initialize completed', initializeResult)
+      await loadModelList()
       clearUserGuidance()
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error)
@@ -1764,6 +1768,7 @@ function parseToolUserInputQuestions(params: Record<string, unknown>): ToolUserI
       id: optimisticMessageId,
       role: 'user',
       text,
+      assistantUtteranceStarted: false,
       turnId: currentTurnId.value || undefined,
     })
 

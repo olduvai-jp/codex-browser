@@ -14,7 +14,6 @@ const props = defineProps<{
   selectedModelId: string
   selectedThinkingEffort: ReasoningEffort | ''
   thinkingOptions: ReasoningEffort[]
-  canLoadModelList: boolean
 }>()
 
 const emit = defineEmits<{
@@ -23,7 +22,6 @@ const emit = defineEmits<{
   'update:selectedThinkingEffort': [value: string]
   send: []
   interrupt: []
-  'load-model-list': []
 }>()
 
 function onInput(event: Event) {
@@ -64,71 +62,35 @@ function onThinkingChange(event: Event) {
 </script>
 
 <template>
-  <form class="composer border-t border-border-default bg-surface px-4 py-4 sm:px-6" @submit.prevent="emit('send')">
-    <div class="mx-auto flex w-full max-w-5xl flex-col gap-3.5">
-      <div class="relative rounded-2xl border border-border-default bg-surface-secondary p-2">
+  <form class="composer border-t border-border-default bg-surface px-4 py-2.5 sm:px-6" @submit.prevent="emit('send')">
+    <div class="mx-auto flex w-full max-w-4xl flex-col gap-1.5">
+      <div class="rounded-[1.45rem] border border-border-default/70 bg-white/85 p-2.5 shadow-sm backdrop-blur-sm dark:border-white/10 dark:bg-[#1f1f1f]">
         <textarea
           :value="props.modelValue"
-          rows="1"
-          placeholder="メッセージを入力..."
+          rows="2"
+          placeholder="Codex に質問してみましょう。ファイルを追加するには @、コマンドには / を使用します"
           :disabled="props.disabled"
-          class="min-h-[54px] w-full resize-none rounded-xl border border-transparent bg-transparent px-3 py-2.5 pr-28 text-sm leading-relaxed text-text-primary placeholder:text-text-tertiary focus:border-accent focus:outline-none disabled:cursor-not-allowed disabled:text-text-muted disabled:placeholder:text-text-muted"
+          class="min-h-[58px] w-full resize-none border-none bg-transparent px-2.5 py-1.5 text-[0.98rem] leading-relaxed text-text-primary placeholder:text-text-tertiary/75 focus:outline-none disabled:cursor-not-allowed disabled:text-text-muted disabled:placeholder:text-text-muted"
           @input="onInput"
           @compositionstart="onCompositionStart"
           @compositionend="onCompositionEnd"
           @keydown.enter.exact="onEnterKeydown"
         />
-        <div class="absolute bottom-3 right-3 flex items-center gap-2">
-          <button
-            v-if="props.canInterrupt"
-            class="rounded-lg border border-warning/40 bg-warning/10 px-3 py-1.5 text-xs font-semibold text-warning transition-colors hover:border-warning/60 hover:bg-warning/20 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-warning/40"
-            data-testid="interrupt-turn-button"
-            type="button"
-            @click="emit('interrupt')"
-          >
-            中断
-          </button>
-          <button
-            class="rounded-lg bg-accent px-3.5 py-1.5 text-xs font-semibold text-white shadow-sm transition-colors hover:bg-accent-hover focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus-ring/50 disabled:cursor-not-allowed disabled:opacity-45"
-            data-testid="send-turn-button"
-            type="submit"
-            :disabled="!props.canSend"
-          >
-            送信
-          </button>
-        </div>
-      </div>
-
-      <p
-        class="flex items-center gap-2 text-xs leading-5"
-        :class="props.hintReady ? 'text-success' : props.disabled ? 'text-warning' : 'text-text-secondary'"
-        data-testid="send-state-hint"
-      >
-        <span
-          class="h-1.5 w-1.5 rounded-full"
-          :class="props.hintReady ? 'bg-success' : props.disabled ? 'bg-warning' : 'bg-text-muted'"
-        />
-        <span>{{ props.sendHint }}</span>
-      </p>
-
-      <div class="rounded-xl border border-border-default bg-surface-secondary/70 px-3 py-3">
-        <div class="grid gap-2.5 sm:grid-cols-[auto,minmax(0,1fr),minmax(0,1fr)] sm:items-end">
+        <div class="flex flex-wrap items-center gap-1.5 px-1.5 pb-0.5 pt-1">
           <button
             type="button"
-            data-testid="load-model-list-button"
-            class="rounded-lg border border-border-strong bg-surface px-3 py-2 text-xs font-semibold text-text-secondary transition-colors hover:border-accent hover:text-accent focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus-ring/40 disabled:cursor-not-allowed disabled:opacity-50"
-            :disabled="!props.canLoadModelList"
-            @click="emit('load-model-list')"
+            class="inline-flex h-8 w-8 items-center justify-center rounded-full border border-border-default/70 bg-surface-secondary/75 text-lg leading-none text-text-secondary transition-colors hover:border-border-strong hover:text-text-primary disabled:cursor-not-allowed disabled:opacity-50 dark:border-white/10 dark:bg-black/10"
+            :disabled="props.settingsDisabled"
+            aria-label="ファイル追加 (準備中)"
+            title="ファイル追加 (準備中)"
           >
-            モデル候補を更新
+            +
           </button>
-
-          <label class="flex min-w-0 flex-col gap-1.5">
-            <span class="text-[11px] font-medium tracking-wide text-text-tertiary">model</span>
+          <div class="relative min-w-0">
             <select
               :value="props.selectedModelId"
               data-testid="model-select"
-              class="rounded-lg border border-border-default bg-surface px-3 py-2 text-xs text-text-primary focus:border-accent focus:outline-none focus:ring-2 focus:ring-focus-ring/40 disabled:cursor-not-allowed disabled:opacity-60"
+              class="h-8 max-w-[12rem] appearance-none rounded-full border border-border-default/70 bg-surface-secondary/70 py-0 pl-3 pr-6 text-xs font-medium text-text-secondary focus:border-accent focus:outline-none disabled:cursor-not-allowed disabled:opacity-60 dark:border-white/10 dark:bg-black/10"
               :disabled="props.settingsDisabled"
               @change="onModelChange"
             >
@@ -137,25 +99,69 @@ function onThinkingChange(event: Event) {
                 {{ option.label }}
               </option>
             </select>
-          </label>
-
-          <label class="flex min-w-0 flex-col gap-1.5">
-            <span class="text-[11px] font-medium tracking-wide text-text-tertiary">thinking</span>
+            <span class="pointer-events-none absolute right-2 top-1/2 -translate-y-1/2 text-xs text-text-tertiary">▾</span>
+          </div>
+          <div class="relative min-w-0">
             <select
               :value="props.selectedThinkingEffort"
               data-testid="thinking-effort-select"
-              class="rounded-lg border border-border-default bg-surface px-3 py-2 text-xs text-text-primary focus:border-accent focus:outline-none focus:ring-2 focus:ring-focus-ring/40 disabled:cursor-not-allowed disabled:opacity-60"
+              class="h-8 max-w-[6.25rem] appearance-none rounded-full border border-border-default/70 bg-surface-secondary/70 py-0 pl-3 pr-6 text-xs font-medium text-text-secondary focus:border-accent focus:outline-none disabled:cursor-not-allowed disabled:opacity-60 dark:border-white/10 dark:bg-black/10"
               :disabled="props.settingsDisabled"
               @change="onThinkingChange"
             >
-              <option value="">(server default)</option>
+              <option value="">自動</option>
               <option v-for="effort in props.thinkingOptions" :key="effort" :value="effort">
                 {{ effort }}
               </option>
             </select>
-          </label>
+            <span class="pointer-events-none absolute right-2 top-1/2 -translate-y-1/2 text-xs text-text-tertiary">▾</span>
+          </div>
+          <div class="ml-auto flex items-center gap-2">
+            <button
+              v-if="props.canInterrupt"
+              class="rounded-full border border-warning/40 bg-warning/10 px-3 py-1.5 text-xs font-semibold text-warning transition-colors hover:border-warning/60 hover:bg-warning/20 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-warning/40"
+              data-testid="interrupt-turn-button"
+              type="button"
+              @click="emit('interrupt')"
+            >
+              中断
+            </button>
+            <button
+              type="button"
+              class="inline-flex h-8 w-8 items-center justify-center rounded-full border border-border-default/70 bg-surface-secondary/75 text-text-secondary transition-colors hover:border-border-strong hover:text-text-primary disabled:cursor-not-allowed disabled:opacity-50 dark:border-white/10 dark:bg-black/10"
+              :disabled="props.disabled"
+              aria-label="音声入力 (準備中)"
+              title="音声入力 (準備中)"
+            >
+              <svg viewBox="0 0 24 24" class="h-3.5 w-3.5" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true">
+                <path d="M12 4a3 3 0 0 1 3 3v5a3 3 0 0 1-6 0V7a3 3 0 0 1 3-3Z" />
+                <path d="M5 11a7 7 0 0 0 14 0" />
+                <path d="M12 18v3" />
+              </svg>
+            </button>
+            <button
+              class="inline-flex h-9 w-9 items-center justify-center rounded-full bg-accent text-white shadow-sm transition-colors hover:bg-accent-hover focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus-ring/50 disabled:cursor-not-allowed disabled:opacity-45"
+              data-testid="send-turn-button"
+              type="submit"
+              :disabled="!props.canSend"
+              aria-label="送信"
+            >
+              <svg viewBox="0 0 24 24" class="h-4.5 w-4.5" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true">
+                <path d="M12 5v14" />
+                <path d="m6 11 6-6 6 6" />
+              </svg>
+            </button>
+          </div>
         </div>
       </div>
+
+      <p
+        class="px-1.5 text-[11px] leading-4"
+        :class="props.hintReady ? 'text-success' : props.disabled ? 'text-warning' : 'text-text-secondary'"
+        data-testid="send-state-hint"
+      >
+        {{ props.sendHint }}
+      </p>
     </div>
   </form>
 </template>

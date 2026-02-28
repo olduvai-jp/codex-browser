@@ -143,6 +143,20 @@ function getVisibleHistoryThreadLabels(wrapper: VueWrapper<ComponentPublicInstan
     .filter((entry) => entry.length > 0)
 }
 
+function getTimelineKinds(wrapper: VueWrapper<ComponentPublicInstance>): string[] {
+  return wrapper
+    .findAll('[data-testid="timeline-item"]')
+    .map((entry) => entry.attributes('data-timeline-kind'))
+    .filter((entry): entry is string => typeof entry === 'string' && entry.length > 0)
+}
+
+function getTimelineText(wrapper: VueWrapper<ComponentPublicInstance>): string {
+  return wrapper
+    .findAll('[data-testid="timeline-item"]')
+    .map((entry) => entry.text())
+    .join('\n')
+}
+
 describe('App.vue ui phase-1 flows', () => {
   beforeEach(() => {
     bridgeMock.reset()
@@ -350,6 +364,19 @@ describe('App.vue ui phase-1 flows', () => {
     await flushPromises()
 
     expect(wrapper.text()).toContain('streamed response')
+    const timelineMessageEntries = wrapper.findAll('[data-testid="timeline-item"][data-timeline-kind="message"]')
+    const userMessageEntry = timelineMessageEntries.find(
+      (entry) => entry.attributes('data-timeline-role') === 'user',
+    )
+    const assistantMessageEntry = timelineMessageEntries.find(
+      (entry) => entry.attributes('data-timeline-role') === 'assistant',
+    )
+    expect(userMessageEntry).toBeDefined()
+    expect(userMessageEntry?.classes()).toContain('ml-auto')
+    expect(userMessageEntry?.classes()).toContain('bg-user-bubble')
+    expect(assistantMessageEntry).toBeDefined()
+    expect(assistantMessageEntry?.classes()).not.toContain('bg-user-bubble')
+    expect(assistantMessageEntry?.classes()).not.toContain('border')
 
     client.emitMessage({
       method: 'item/completed',
@@ -374,7 +401,7 @@ describe('App.vue ui phase-1 flows', () => {
     await flushPromises()
 
     expect(wrapper.text()).toContain('応答状態: completed')
-    expect(wrapper.text()).toContain('Turn turn-phase2-1 completed with status: completed')
+    expect(getTimelineText(wrapper)).toContain('応答を完了しました')
 
     wrapper.unmount()
   })
@@ -681,6 +708,289 @@ describe('App.vue ui phase-1 flows', () => {
 
     expect(client.respond).toHaveBeenCalledWith(42, { decision: 'accept' })
     expect(wrapper.find('.approval-backdrop').exists()).toBe(false)
+
+    wrapper.unmount()
+  })
+
+  it('renders message/tool/status/approval/input items in a single timeline order', async () => {
+    bridgeMock.setRequestHandler(async (method) => {
+      if (method === 'initialize') {
+        return { userAgent: 'mock-codex-agent' }
+      }
+
+      if (method === 'thread/start') {
+        return { thread: { id: 'thread-timeline-order-1' } }
+      }
+
+      if (method === 'turn/start') {
+        return { turn: { id: 'turn-timeline-order-1' } }
+      }
+
+      throw new Error(`Unexpected method: ${method}`)
+    })
+
+    const wrapper = mount(App)
+    const client = await connectAndInitialize(wrapper)
+
+    await getByTestId(wrapper, 'start-thread-button').trigger('click')
+    await flushPromises()
+    await wrapper.get('textarea').setValue('Timeline order check')
+    await wrapper.get('form.composer').trigger('submit')
+    await flushPromises()
+
+    client.emitMessage({
+      method: 'item/started',
+      params: {
+        turnId: 'turn-timeline-order-1',
+        item: {
+          type: 'commandExecution',
+          id: 'item-timeline-tool-1',
+          callId: 'call-timeline-tool-1',
+          command: 'echo timeline order',
+        },
+      },
+    })
+    client.emitMessage({
+      id: 'tool-input-timeline-order-1',
+      method: 'item/tool/requestUserInput',
+      params: {
+        turnId: 'turn-timeline-order-1',
+        callId: 'call-timeline-input-1',
+        tool: 'timeline_prompt_tool',
+        questions: [{ questionId: 'q_reason', label: 'Reason' }],
+      },
+    })
+    client.emitMessage({
+      id: 'approval-timeline-order-1',
+      method: 'item/commandExecution/requestApproval',
+      params: {
+        turnId: 'turn-timeline-order-1',
+        command: 'echo approval timeline',
+      },
+    })
+    client.emitMessage({
+      method: 'turn/completed',
+      params: {
+        turn: {
+          id: 'turn-timeline-order-1',
+          status: 'completed',
+        },
+      },
+    })
+    await flushPromises()
+
+    const kinds = getTimelineKinds(wrapper)
+    const firstMessageIndex = kinds.indexOf('message')
+    const toolIndex = kinds.indexOf('tool')
+    const toolInputIndex = kinds.indexOf('toolUserInput')
+    const approvalIndex = kinds.indexOf('approval')
+    const turnStatusIndex = kinds.indexOf('turnStatus')
+
+    expect(firstMessageIndex).toBeGreaterThanOrEqual(0)
+    expect(toolIndex).toBeGreaterThan(firstMessageIndex)
+    expect(toolInputIndex).toBeGreaterThan(toolIndex)
+    expect(approvalIndex).toBeGreaterThan(toolInputIndex)
+    expect(turnStatusIndex).toBeGreaterThan(approvalIndex)
+
+    const timelineText = getTimelineText(wrapper)
+    expect(timelineText).toContain('コマンド実行')
+    expect(timelineText).toContain('実行内容: echo timeline order')
+    expect(timelineText).toContain('コマンド実行の承認')
+    expect(timelineText).toContain('実行予定: echo approval timeline')
+    expect(timelineText).toContain('入力項目 1件: Reason')
+    expect(timelineText).toContain('応答を完了しました')
+    expect(timelineText).not.toContain('turn-timeline-order-1')
+    expect(timelineText).not.toContain('call-timeline-tool-1')
+    expect(timelineText).not.toContain('approval-timeline-order-1')
+    expect(timelineText).not.toContain('tool-input-timeline-order-1')
+
+    wrapper.unmount()
+  })
+
+  it('keeps approval and input timeline entries after pending -> resolved transitions', async () => {
+    bridgeMock.setRequestHandler(async (method) => {
+      if (method === 'initialize') {
+        return { userAgent: 'mock-codex-agent' }
+      }
+
+      throw new Error(`Unexpected method: ${method}`)
+    })
+
+    const wrapper = mount(App)
+    const client = await connectAndInitialize(wrapper)
+
+    client.emitMessage({
+      id: 'approval-history-1',
+      method: 'item/commandExecution/requestApproval',
+      params: {
+        command: 'echo approval history',
+      },
+    })
+    client.emitMessage({
+      id: 'tool-input-history-1',
+      method: 'item/tool/requestUserInput',
+      params: {
+        tool: 'history_prompt_tool',
+        questions: [{ questionId: 'q_value', label: 'Value' }],
+      },
+    })
+    await flushPromises()
+
+    expect(wrapper.findAll('[data-testid="timeline-approval-state"]').map((entry) => entry.text())).toContain('対応待ち')
+    expect(
+      wrapper.findAll('[data-testid="timeline-tool-user-input-state"]').map((entry) => entry.text()),
+    ).toContain('対応待ち')
+
+    await getByTestId(wrapper, 'tool-user-input-field-q_value').setValue('confirmed')
+    await getByTestId(wrapper, 'tool-user-input-submit').trigger('click')
+    await getButton(wrapper, '許可する').trigger('click')
+    await flushPromises()
+
+    expect(wrapper.findAll('[data-testid="timeline-approval-state"]').map((entry) => entry.text())).toContain(
+      '対応済み (accept)',
+    )
+    expect(
+      wrapper.findAll('[data-testid="timeline-tool-user-input-state"]').map((entry) => entry.text()),
+    ).toContain('対応済み (送信)')
+    const timelineText = getTimelineText(wrapper)
+    expect(timelineText).toContain('コマンド実行の承認')
+    expect(timelineText).toContain('実行予定: echo approval history')
+    expect(timelineText).toContain('入力項目 1件: Value')
+    expect(timelineText).not.toContain('approval-history-1')
+    expect(timelineText).not.toContain('tool-input-history-1')
+
+    expect(client.respond).toHaveBeenCalledWith('tool-input-history-1', {
+      answers: {
+        q_value: { answers: ['confirmed'] },
+      },
+    })
+    expect(client.respond).toHaveBeenCalledWith('approval-history-1', {
+      decision: 'accept',
+    })
+
+    wrapper.unmount()
+  })
+
+  it('clears approval/input timeline history when switching threads via start/resume/read', async () => {
+    let startThreadCallCount = 0
+    bridgeMock.setRequestHandler(async (method) => {
+      if (method === 'initialize') {
+        return { userAgent: 'mock-codex-agent' }
+      }
+
+      if (method === 'thread/start') {
+        startThreadCallCount += 1
+        return { thread: { id: `thread-cross-reset-start-${startThreadCallCount}` } }
+      }
+
+      if (method === 'thread/resume') {
+        return {
+          thread: {
+            id: 'thread-cross-reset-resume-1',
+            turns: [],
+          },
+        }
+      }
+
+      if (method === 'thread/read') {
+        return {
+          thread: {
+            id: 'thread-cross-reset-read-1',
+            turns: [],
+          },
+        }
+      }
+
+      throw new Error(`Unexpected method: ${method}`)
+    })
+
+    const { wrapper, bridge } = mountBridgeClientHarness()
+    await bridge.connect()
+    await flushPromises()
+
+    const client = getClientInstance()
+    const timelineKinds = () => bridge.timelineItems.value.map((item) => item.kind)
+
+    await bridge.startThread()
+    await flushPromises()
+
+    client.emitMessage({
+      id: 'approval-cross-reset-start-1',
+      method: 'item/commandExecution/requestApproval',
+      params: {
+        command: 'echo stale approval start',
+      },
+    })
+    client.emitMessage({
+      id: 'tool-input-cross-reset-start-1',
+      method: 'item/tool/requestUserInput',
+      params: {
+        tool: 'cross_reset_prompt_tool',
+        questions: [{ questionId: 'q_start', label: 'Start' }],
+      },
+    })
+    await flushPromises()
+
+    expect(timelineKinds()).toContain('approval')
+    expect(timelineKinds()).toContain('toolUserInput')
+
+    await bridge.startThread()
+    await flushPromises()
+
+    expect(timelineKinds()).not.toContain('approval')
+    expect(timelineKinds()).not.toContain('toolUserInput')
+
+    client.emitMessage({
+      id: 'approval-cross-reset-resume-1',
+      method: 'item/commandExecution/requestApproval',
+      params: {
+        command: 'echo stale approval resume',
+      },
+    })
+    client.emitMessage({
+      id: 'tool-input-cross-reset-resume-1',
+      method: 'item/tool/requestUserInput',
+      params: {
+        tool: 'cross_reset_prompt_tool',
+        questions: [{ questionId: 'q_resume', label: 'Resume' }],
+      },
+    })
+    await flushPromises()
+
+    expect(timelineKinds()).toContain('approval')
+    expect(timelineKinds()).toContain('toolUserInput')
+
+    await bridge.resumeThread('thread-cross-reset-resume-1')
+    await flushPromises()
+
+    expect(timelineKinds()).not.toContain('approval')
+    expect(timelineKinds()).not.toContain('toolUserInput')
+
+    client.emitMessage({
+      id: 'approval-cross-reset-read-1',
+      method: 'item/commandExecution/requestApproval',
+      params: {
+        command: 'echo stale approval read',
+      },
+    })
+    client.emitMessage({
+      id: 'tool-input-cross-reset-read-1',
+      method: 'item/tool/requestUserInput',
+      params: {
+        tool: 'cross_reset_prompt_tool',
+        questions: [{ questionId: 'q_read', label: 'Read' }],
+      },
+    })
+    await flushPromises()
+
+    expect(timelineKinds()).toContain('approval')
+    expect(timelineKinds()).toContain('toolUserInput')
+
+    await bridge.readThread('thread-cross-reset-read-1')
+    await flushPromises()
+
+    expect(timelineKinds()).not.toContain('approval')
+    expect(timelineKinds()).not.toContain('toolUserInput')
 
     wrapper.unmount()
   })

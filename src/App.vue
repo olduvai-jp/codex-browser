@@ -26,11 +26,11 @@ const {
   selectedThinkingEffort,
   configSnapshot,
   userGuidance,
-  messages,
   logs,
   toolCalls,
   toolUserInputRequests,
   approvals,
+  timelineItems,
   historyResumeAttemptCount,
   historyResumeSuccessCount,
   approvalDecisionCount,
@@ -116,7 +116,11 @@ onMounted(() => {
 
       <!-- Chat Area -->
       <div class="flex min-w-0 flex-1 flex-col bg-surface">
-        <MessageList :messages="messages" />
+        <MessageList
+          :timeline-items="timelineItems"
+          :current-approval-request-id="currentApproval ? String(currentApproval.id) : null"
+          :current-tool-user-input-request-id="currentToolUserInputRequest ? String(currentToolUserInputRequest.id) : null"
+        />
         <ChatComposer
           :model-value="messageInput"
           :can-send="canSendMessage"

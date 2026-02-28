@@ -25,6 +25,11 @@ import type {
   ModelOption,
   ReasoningEffort,
   ThreadHistoryEntry,
+  TimelineApprovalItem,
+  TimelineItem,
+  TimelineToolUserInputItem,
+  TimelineToolUserInputState,
+  TimelineTurnStatusItem,
   ToolCallEntry,
   ToolCallEvent,
   ToolCallStatus,
@@ -44,6 +49,9 @@ const REASONING_EFFORT_SET = new Set<string>(REASONING_EFFORT_VALUES)
 
 type ToolItemType = 'commandExecution' | 'fileChange' | 'mcpToolCall'
 type ToolUserInputAnswers = Record<string, { answers: string[] }>
+type TimelineTurnStatusEntry = Omit<TimelineTurnStatusItem, 'kind'>
+type TimelineApprovalEntry = Omit<TimelineApprovalItem, 'kind'>
+type TimelineToolUserInputEntry = Omit<TimelineToolUserInputItem, 'kind'>
 
 function isReasoningEffort(value: string): value is ReasoningEffort {
   return REASONING_EFFORT_SET.has(value)
@@ -185,6 +193,9 @@ export function useBridgeClient() {
   const toolCalls = ref<ToolCallEntry[]>([])
   const toolUserInputRequests = ref<ToolUserInputRequest[]>([])
   const approvals = ref<ApprovalRequest[]>([])
+  const turnStatusTimeline = ref<TimelineTurnStatusEntry[]>([])
+  const approvalTimeline = ref<TimelineApprovalEntry[]>([])
+  const toolUserInputTimeline = ref<TimelineToolUserInputEntry[]>([])
   const appStartedAtMs = Date.now()
   const firstSendDurationMs = ref<number | null>(null)
   const historyResumeAttemptCount = ref(0)
@@ -200,12 +211,15 @@ export function useBridgeClient() {
   const reasoningSummaryByTurnId = new Map<string, string>()
   const reasoningTurnIdByItemId = new Map<string, string>()
   const approvalRequestedAtMsById = new Map<string, number>()
+  const approvalTimelineEntryIdByMetricKey = new Map<string, string>()
+  const toolUserInputTimelineEntryIdByRequestKey = new Map<string, string>()
   const toolCallEntryIdByLookupKey = new Map<string, string>()
 
   let uiMessageSequence = 1
   let logSequence = 1
   let toolCallSequence = 1
   let toolCallEventSequence = 1
+  let timelineSequence = 1
 
   function getModelOption(modelId: string): ModelOption | null {
     if (modelId.length === 0) {
@@ -307,6 +321,64 @@ export function useBridgeClient() {
   const canQuickStartConversation = computed(
     () => connectionState.value !== 'connecting' && !quickStartInProgress.value && !isTurnActive.value,
   )
+  const timelineItems = computed<TimelineItem[]>(() => {
+    const items: TimelineItem[] = []
+
+    for (let index = 0; index < messages.value.length; index += 1) {
+      const message = messages.value[index]
+      if (!message) {
+        continue
+      }
+      items.push({
+        id: `timeline-message-${message.id}`,
+        kind: 'message',
+        timelineSequence: message.timelineSequence ?? index + 1,
+        message,
+      })
+    }
+
+    for (let index = 0; index < toolCalls.value.length; index += 1) {
+      const entry = toolCalls.value[index]
+      if (!entry) {
+        continue
+      }
+      items.push({
+        id: `timeline-tool-${entry.id}`,
+        kind: 'tool',
+        timelineSequence: entry.timelineSequence ?? index + 1,
+        toolCall: entry,
+      })
+    }
+
+    for (const entry of turnStatusTimeline.value) {
+      items.push({
+        ...entry,
+        kind: 'turnStatus',
+      })
+    }
+
+    for (const entry of approvalTimeline.value) {
+      items.push({
+        ...entry,
+        kind: 'approval',
+      })
+    }
+
+    for (const entry of toolUserInputTimeline.value) {
+      items.push({
+        ...entry,
+        kind: 'toolUserInput',
+      })
+    }
+
+    return items.sort((left, right) => {
+      if (left.timelineSequence === right.timelineSequence) {
+        return left.id.localeCompare(right.id)
+      }
+
+      return left.timelineSequence - right.timelineSequence
+    })
+  })
   const currentToolUserInputRequest = computed(() => toolUserInputRequests.value[0] ?? null)
   const currentApproval = computed(() => approvals.value[0] ?? null)
   const historyResumeSuccessRate = computed(() =>
@@ -382,6 +454,155 @@ export function useBridgeClient() {
     const id = `${prefix}-${uiMessageSequence}`
     uiMessageSequence += 1
     return id
+  }
+
+  function nextTimelineSequence(): number {
+    const next = timelineSequence
+    timelineSequence += 1
+    return next
+  }
+
+  function makeToolUserInputRequestKey(id: JsonRpcId): string {
+    return `${typeof id}:${String(id)}`
+  }
+
+  function makeTurnStatusTimelineEntry(
+    status: TurnStatus,
+    label: string,
+    turnId?: string,
+    occurredAt?: string,
+  ): TimelineTurnStatusEntry {
+    const sequence = nextTimelineSequence()
+    return {
+      id: `turn-status-${sequence}`,
+      timelineSequence: sequence,
+      status,
+      label,
+      turnId,
+      occurredAt: occurredAt ?? new Date().toISOString(),
+    }
+  }
+
+  function pushTurnStatusTimeline(status: TurnStatus, label: string, turnId?: string, occurredAt?: string): void {
+    turnStatusTimeline.value.push(makeTurnStatusTimelineEntry(status, label, turnId, occurredAt))
+  }
+
+  function addApprovalTimelineEntry(
+    approval: ApprovalRequest,
+    requestedAtMs: number,
+  ): TimelineApprovalEntry {
+    const sequence = nextTimelineSequence()
+    const requestedAt = new Date(requestedAtMs).toISOString()
+    const entry: TimelineApprovalEntry = {
+      id: `approval-${sequence}`,
+      timelineSequence: sequence,
+      requestId: String(approval.id),
+      method: approval.method,
+      params: approval.params,
+      turnId:
+        pickStringValue(approval.params, ['turnId']) ??
+        pickStringValue(approval.params, ['turn_id']) ??
+        undefined,
+      state: 'pending',
+      requestedAt,
+      resolvedAt: undefined,
+      decision: undefined,
+    }
+    approvalTimeline.value.push(entry)
+    approvalTimelineEntryIdByMetricKey.set(makeApprovalMetricKey(approval.id), entry.id)
+    return entry
+  }
+
+  function resolveApprovalTimelineEntry(approval: ApprovalRequest, decision: ApprovalDecision): void {
+    const key = makeApprovalMetricKey(approval.id)
+    const entryId = approvalTimelineEntryIdByMetricKey.get(key)
+    const entry = entryId
+      ? approvalTimeline.value.find((candidate) => candidate.id === entryId)
+      : undefined
+    const resolvedAt = new Date().toISOString()
+    if (entry) {
+      entry.state = 'resolved'
+      entry.decision = decision
+      entry.resolvedAt = resolvedAt
+      return
+    }
+
+    const sequence = nextTimelineSequence()
+    approvalTimeline.value.push({
+      id: `approval-${sequence}`,
+      timelineSequence: sequence,
+      requestId: String(approval.id),
+      method: approval.method,
+      params: approval.params,
+      turnId:
+        pickStringValue(approval.params, ['turnId']) ??
+        pickStringValue(approval.params, ['turn_id']) ??
+        undefined,
+      state: 'resolved',
+      decision,
+      requestedAt: resolvedAt,
+      resolvedAt,
+    })
+  }
+
+  function addToolUserInputTimelineEntry(
+    request: ToolUserInputRequest,
+    requestedAtMs: number,
+  ): TimelineToolUserInputEntry {
+    const sequence = nextTimelineSequence()
+    const requestedAt = new Date(requestedAtMs).toISOString()
+    const entry: TimelineToolUserInputEntry = {
+      id: `tool-user-input-${sequence}`,
+      timelineSequence: sequence,
+      requestId: String(request.id),
+      toolName: request.toolName,
+      callId: request.callId,
+      turnId: request.turnId,
+      questions: request.questions,
+      params: request.params,
+      state: 'pending',
+      requestedAt,
+      resolvedAt: undefined,
+      answers: undefined,
+    }
+    toolUserInputTimeline.value.push(entry)
+    toolUserInputTimelineEntryIdByRequestKey.set(makeToolUserInputRequestKey(request.id), entry.id)
+    return entry
+  }
+
+  function resolveToolUserInputTimelineEntry(
+    request: ToolUserInputRequest,
+    state: TimelineToolUserInputState,
+    answers?: ToolUserInputAnswers,
+  ): void {
+    const key = makeToolUserInputRequestKey(request.id)
+    const entryId = toolUserInputTimelineEntryIdByRequestKey.get(key)
+    const entry = entryId
+      ? toolUserInputTimeline.value.find((candidate) => candidate.id === entryId)
+      : undefined
+    const resolvedAt = new Date().toISOString()
+    if (entry) {
+      entry.state = state
+      entry.resolvedAt = resolvedAt
+      entry.answers = answers
+      return
+    }
+
+    const sequence = nextTimelineSequence()
+    toolUserInputTimeline.value.push({
+      id: `tool-user-input-${sequence}`,
+      timelineSequence: sequence,
+      requestId: String(request.id),
+      toolName: request.toolName,
+      callId: request.callId,
+      turnId: request.turnId,
+      questions: request.questions,
+      params: request.params,
+      state,
+      requestedAt: resolvedAt,
+      resolvedAt,
+      answers,
+    })
   }
 
   function pushLog(
@@ -516,6 +737,7 @@ export function useBridgeClient() {
       outputText: '',
       startedAt: new Date(timestampMs).toISOString(),
       events: [],
+      timelineSequence: nextTimelineSequence(),
     }
     toolCallSequence += 1
     toolCalls.value.unshift(entry)
@@ -861,12 +1083,26 @@ function parseToolUserInputQuestions(params: Record<string, unknown>): ToolUserI
     reasoningSummaryByTurnId.clear()
     reasoningTurnIdByItemId.clear()
     clearToolCalls()
+    turnStatusTimeline.value = []
+    approvals.value = []
+    toolUserInputRequests.value = []
+    approvalRequestedAtMsById.clear()
+    approvalTimelineEntryIdByMetricKey.clear()
+    toolUserInputTimelineEntryIdByRequestKey.clear()
+    approvalTimeline.value = []
+    toolUserInputTimeline.value = []
     readPreviewThreadId.value = ''
     currentTurnId.value = ''
     turnStatus.value = 'idle'
   }
 
   function addMessage(message: UiMessage): void {
+    if (typeof message.timelineSequence !== 'number') {
+      message.timelineSequence = nextTimelineSequence()
+    }
+    if (typeof message.createdAt !== 'string') {
+      message.createdAt = new Date().toISOString()
+    }
     messages.value.push(message)
     if (message.itemId && message.role === 'assistant') {
       assistantMessageIndexByItemId.set(message.itemId, messages.value.length - 1)
@@ -988,6 +1224,8 @@ function parseToolUserInputQuestions(params: Record<string, unknown>): ToolUserI
               text,
               assistantUtteranceStarted: false,
               turnId,
+              createdAt: new Date().toISOString(),
+              timelineSequence: nextTimelineSequence(),
             })
           }
         }
@@ -1030,6 +1268,8 @@ function parseToolUserInputQuestions(params: Record<string, unknown>): ToolUserI
             summaryText: summaryText.length > 0 ? summaryText : undefined,
             assistantUtteranceStarted: answerText.length > 0,
             streaming: false,
+            createdAt: new Date().toISOString(),
+            timelineSequence: nextTimelineSequence(),
           })
           const messageIndex = hydratedMessages.length - 1
           turnAssistantMessageIndices.push(messageIndex)
@@ -1164,6 +1404,7 @@ function parseToolUserInputQuestions(params: Record<string, unknown>): ToolUserI
     if (method === 'item/tool/requestUserInput') {
       const requestParams = isRecord(params) ? params : {}
       const toolName = pickStringValue(requestParams, ['tool', 'toolName', 'name']) ?? 'tool/requestUserInput'
+      const requestedAtMs = Date.now()
       const request: ToolUserInputRequest = {
         id,
         method: 'item/tool/requestUserInput',
@@ -1172,9 +1413,11 @@ function parseToolUserInputQuestions(params: Record<string, unknown>): ToolUserI
         toolName,
         questions: parseToolUserInputQuestions(requestParams),
         params: requestParams,
+        requestedAt: new Date(requestedAtMs).toISOString(),
       }
 
       toolUserInputRequests.value.push(request)
+      addToolUserInputTimelineEntry(request, requestedAtMs)
       updateToolCallEntry({
         method,
         toolName,
@@ -1206,7 +1449,9 @@ function parseToolUserInputQuestions(params: Record<string, unknown>): ToolUserI
     }
 
     approvals.value.push(approvalRequest)
-    approvalRequestedAtMsById.set(makeApprovalMetricKey(approvalRequest.id), Date.now())
+    const requestedAtMs = Date.now()
+    approvalRequestedAtMsById.set(makeApprovalMetricKey(approvalRequest.id), requestedAtMs)
+    addApprovalTimelineEntry(approvalRequest, requestedAtMs)
     pushLog('rpc', 'info', `Approval request queued: ${approvalRequest.method}`, params)
   }
 
@@ -1225,6 +1470,7 @@ function parseToolUserInputQuestions(params: Record<string, unknown>): ToolUserI
       const turnId = typeof params.turn.id === 'string' ? params.turn.id : ''
       currentTurnId.value = turnId
       turnStatus.value = 'inProgress'
+      pushTurnStatusTimeline('inProgress', `Turn ${turnId || '(unknown)'} started`, turnId || undefined)
       pushLog('rpc', 'info', `Turn started: ${turnId || '(unknown id)'}`)
       return
     }
@@ -1241,13 +1487,11 @@ function parseToolUserInputQuestions(params: Record<string, unknown>): ToolUserI
 
       currentTurnId.value = turnId
       turnStatus.value = status
-      addMessage({
-        id: makeUiMessageId('system'),
-        role: 'system',
-        text: `Turn ${turnId || '(unknown)'} completed with status: ${status}`,
-        assistantUtteranceStarted: false,
-        turnId,
-      })
+      pushTurnStatusTimeline(
+        status,
+        `Turn ${turnId || '(unknown)'} completed with status: ${status}`,
+        turnId || undefined,
+      )
       pushLog('rpc', status === 'completed' ? 'info' : 'warn', `Turn completed: ${status}`, params)
       return
     }
@@ -1481,6 +1725,10 @@ function parseToolUserInputQuestions(params: Record<string, unknown>): ToolUserI
     approvals.value = []
     toolUserInputRequests.value = []
     approvalRequestedAtMsById.clear()
+    approvalTimelineEntryIdByMetricKey.clear()
+    toolUserInputTimelineEntryIdByRequestKey.clear()
+    approvalTimeline.value = []
+    toolUserInputTimeline.value = []
     bridgeCwd.value = ''
     connectionState.value = 'disconnected'
   }
@@ -1701,9 +1949,8 @@ function parseToolUserInputQuestions(params: Record<string, unknown>): ToolUserI
 
       const readThreadId = pickStringValue(thread, ['id', 'threadId', 'thread_id']) ?? resolvedThreadId
       selectedHistoryThreadId.value = readThreadId
+      resetConversation()
       readPreviewThreadId.value = readThreadId
-      currentTurnId.value = ''
-      turnStatus.value = 'idle'
       hydrateMessagesFromThread(thread)
       pushLog('rpc', 'info', `thread/read completed (read-only): ${readThreadId}`, {
         turns: Array.isArray(thread.turns) ? thread.turns.length : 0,
@@ -1821,6 +2068,7 @@ function parseToolUserInputQuestions(params: Record<string, unknown>): ToolUserI
           currentTurnId.value = ''
         }
         turnStatus.value = 'idle'
+        pushTurnStatusTimeline('failed', `Turn start failed: ${message}`)
         setUserGuidance(
           'warn',
           `会話がサーバー上で見つかりません。新しい会話を作成または再開してから再送してください。詳細: ${message}`,
@@ -1828,6 +2076,7 @@ function parseToolUserInputQuestions(params: Record<string, unknown>): ToolUserI
         return
       }
       turnStatus.value = 'failed'
+      pushTurnStatusTimeline('failed', `Turn start failed: ${message}`, currentTurnId.value || undefined)
       setUserGuidance(
         'error',
         `メッセージ送信に失敗しました。しばらく待ってから再送してください。詳細: ${message}`,
@@ -1859,6 +2108,11 @@ function parseToolUserInputQuestions(params: Record<string, unknown>): ToolUserI
       ) {
         currentTurnId.value = response.turn.id
         turnStatus.value = 'interrupted'
+        pushTurnStatusTimeline(
+          'interrupted',
+          `Turn ${response.turn.id} completed with status: interrupted`,
+          response.turn.id,
+        )
       }
       pushLog('rpc', 'info', `turn/interrupt sent: ${turnId}`, response)
     } catch (error) {
@@ -1957,6 +2211,7 @@ function parseToolUserInputQuestions(params: Record<string, unknown>): ToolUserI
     }
     client.value.respond(request.id, result)
     toolUserInputRequests.value = remaining
+    resolveToolUserInputTimelineEntry(request, 'submitted', normalizedAnswers)
     updateToolCallEntry({
       method: `${request.method}/response`,
       toolName: request.toolName,
@@ -1994,6 +2249,7 @@ function parseToolUserInputQuestions(params: Record<string, unknown>): ToolUserI
     }
     client.value.respond(request.id, result)
     toolUserInputRequests.value = remaining
+    resolveToolUserInputTimelineEntry(request, 'cancelled', answers)
     updateToolCallEntry({
       method: `${request.method}/cancel`,
       toolName: request.toolName,
@@ -2035,6 +2291,7 @@ function parseToolUserInputQuestions(params: Record<string, unknown>): ToolUserI
     })
 
     approvals.value = remaining
+    resolveApprovalTimelineEntry(approval, decision)
     pushLog('rpc', 'info', `Approval responded: ${decision}`, {
       id: approval.id,
       method: approval.method,
@@ -2069,6 +2326,7 @@ function parseToolUserInputQuestions(params: Record<string, unknown>): ToolUserI
     toolCalls,
     toolUserInputRequests,
     approvals,
+    timelineItems,
     firstSendDurationMs,
     historyResumeAttemptCount,
     historyResumeSuccessCount,

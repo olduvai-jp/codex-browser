@@ -1,3 +1,4 @@
+import type { ApprovalDecision, ApprovalMethod } from '@/lib/approvalRequests'
 import type { JsonRpcId } from '@/lib/bridgeRpcClient'
 
 export type { JsonRpcId } from '@/lib/bridgeRpcClient'
@@ -24,6 +25,8 @@ export type UiMessage = {
   itemId?: string
   turnId?: string
   streaming?: boolean
+  createdAt?: string
+  timelineSequence?: number
 }
 
 export type LogEntry = {
@@ -59,6 +62,7 @@ export type ToolCallEntry = {
   completedAt?: string
   durationMs?: number
   events: ToolCallEvent[]
+  timelineSequence?: number
 }
 
 export type ToolUserInputQuestion = {
@@ -77,7 +81,69 @@ export type ToolUserInputRequest = {
   toolName: string
   questions: ToolUserInputQuestion[]
   params: Record<string, unknown>
+  requestedAt?: string
+  timelineSequence?: number
 }
+
+export type TimelineApprovalState = 'pending' | 'resolved'
+export type TimelineToolUserInputState = 'pending' | 'submitted' | 'cancelled'
+
+export type TimelineItemBase = {
+  id: string
+  kind: 'message' | 'tool' | 'turnStatus' | 'approval' | 'toolUserInput'
+  timelineSequence: number
+}
+
+export type TimelineMessageItem = TimelineItemBase & {
+  kind: 'message'
+  message: UiMessage
+}
+
+export type TimelineToolItem = TimelineItemBase & {
+  kind: 'tool'
+  toolCall: ToolCallEntry
+}
+
+export type TimelineTurnStatusItem = TimelineItemBase & {
+  kind: 'turnStatus'
+  turnId?: string
+  status: TurnStatus
+  label: string
+  occurredAt: string
+}
+
+export type TimelineApprovalItem = TimelineItemBase & {
+  kind: 'approval'
+  requestId: string
+  method: ApprovalMethod
+  params: Record<string, unknown>
+  turnId?: string
+  state: TimelineApprovalState
+  decision?: ApprovalDecision
+  requestedAt: string
+  resolvedAt?: string
+}
+
+export type TimelineToolUserInputItem = TimelineItemBase & {
+  kind: 'toolUserInput'
+  requestId: string
+  toolName: string
+  callId?: string
+  turnId?: string
+  questions: ToolUserInputQuestion[]
+  params: Record<string, unknown>
+  state: TimelineToolUserInputState
+  requestedAt: string
+  resolvedAt?: string
+  answers?: Record<string, { answers: string[] }>
+}
+
+export type TimelineItem =
+  | TimelineMessageItem
+  | TimelineToolItem
+  | TimelineTurnStatusItem
+  | TimelineApprovalItem
+  | TimelineToolUserInputItem
 
 export type ThreadHistoryEntry = {
   id: string

@@ -298,7 +298,12 @@ function toolUserInputSummary(entry: TimelineToolUserInputEntry): string {
               <span class="rounded-full bg-surface-tertiary px-2 py-0.5 font-semibold text-text-secondary">
                 {{ toolActionLabel(entry.toolCall) }}
               </span>
-              <span class="text-xs text-text-primary">{{ toolActionSummary(entry.toolCall) }}</span>
+              <span
+                class="min-w-0 flex-1 max-w-full truncate text-xs text-text-primary"
+                :title="toolActionSummary(entry.toolCall)"
+              >
+                {{ toolActionSummary(entry.toolCall) }}
+              </span>
               <span
                 class="rounded-full px-2 py-0.5 font-semibold"
                 data-testid="timeline-tool-status"
@@ -336,7 +341,14 @@ function toolUserInputSummary(entry: TimelineToolUserInputEntry): string {
               <span class="rounded-full bg-warning/10 px-2 py-0.5 font-semibold text-warning">
                 {{ approvalActionLabel(entry.method) }}
               </span>
-              <span class="text-xs text-text-primary">{{ approvalTargetSummary(entry) }}</span>
+              <span
+                v-if="entry.method.includes('commandExecution')"
+                class="min-w-0 flex-1 max-w-full truncate text-xs text-text-primary"
+                :title="approvalTargetSummary(entry)"
+              >
+                {{ approvalTargetSummary(entry) }}
+              </span>
+              <span v-else class="text-xs text-text-primary">{{ approvalTargetSummary(entry) }}</span>
               <span
                 class="rounded-full px-2 py-0.5 font-semibold"
                 data-testid="timeline-approval-state"

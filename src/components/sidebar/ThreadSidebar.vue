@@ -8,12 +8,14 @@ defineProps<{
   activeThreadId: string
   canRefresh: boolean
   isTurnActive: boolean
+  advancedPanelOpen: boolean
 }>()
 
 const emit = defineEmits<{
   refresh: []
   'open-thread': [threadId: string]
   'new-thread': []
+  'toggle-advanced-panel': []
 }>()
 </script>
 
@@ -65,6 +67,17 @@ const emit = defineEmits<{
         :disabled="isTurnActive"
         @open="emit('open-thread', $event)"
       />
+    </div>
+
+    <div class="border-t border-border-default px-3 py-2.5">
+      <button
+        class="w-full rounded-xl border border-border-default bg-surface px-3 py-2 text-xs font-medium text-text-secondary transition-colors hover:border-accent hover:text-accent focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus-ring/40"
+        data-testid="advanced-panel-toggle-button"
+        :aria-expanded="advancedPanelOpen ? 'true' : 'false'"
+        @click="emit('toggle-advanced-panel')"
+      >
+        {{ advancedPanelOpen ? '詳細ログと運用操作を閉じる' : '詳細ログと運用操作を開く' }}
+      </button>
     </div>
   </aside>
 </template>

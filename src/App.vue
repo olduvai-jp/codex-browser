@@ -68,6 +68,7 @@ const {
 } = useBridgeClient()
 
 const sidebarOpen = ref(false)
+const advancedPanelOpen = ref(false)
 
 onMounted(() => {
   quickStartConversation()
@@ -101,9 +102,11 @@ onMounted(() => {
           :active-thread-id="activeThreadId"
           :can-refresh="isConnected && initialized"
           :is-turn-active="isTurnActive"
+          :advanced-panel-open="advancedPanelOpen"
           @refresh="loadThreadHistory"
           @open-thread="resumeThread($event)"
           @new-thread="startThread"
+          @toggle-advanced-panel="advancedPanelOpen = !advancedPanelOpen"
         />
       </div>
 
@@ -144,6 +147,7 @@ onMounted(() => {
 
     <!-- Advanced Panel -->
     <AdvancedPanel
+      :open="advancedPanelOpen"
       :can-start-thread="canStartThread"
       :resume-thread-id="resumeThreadId"
       :can-resume-thread="canResumeThread"
@@ -172,6 +176,7 @@ onMounted(() => {
       @update:resume-thread-id="resumeThreadId = $event"
       @resume-thread="resumeThread"
       @load-config="loadConfig"
+      @close="advancedPanelOpen = false"
     />
 
     <!-- Approval Modal -->

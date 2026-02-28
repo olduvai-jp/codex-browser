@@ -78,10 +78,11 @@ function getByTestId(wrapper: VueWrapper<ComponentPublicInstance>, testId: strin
   return element
 }
 
-function openAdvancedPanel(wrapper: VueWrapper<ComponentPublicInstance>): void {
-  const details = wrapper.get('details.advanced-panel')
-  if (!details.attributes('open')) {
-    details.element.setAttribute('open', '')
+async function openAdvancedPanel(wrapper: VueWrapper<ComponentPublicInstance>): Promise<void> {
+  const toggleButton = getByTestId(wrapper, 'advanced-panel-toggle-button')
+  if (toggleButton.attributes('aria-expanded') !== 'true') {
+    await toggleButton.trigger('click')
+    await flushPromises()
   }
 }
 
@@ -174,7 +175,7 @@ describe('App.vue ui phase-1 flows', () => {
     const wrapper = mount(App)
     await connectAndInitialize(wrapper)
 
-    openAdvancedPanel(wrapper)
+    await openAdvancedPanel(wrapper)
 
     expect(wrapper.text()).toContain('接続状態: connected')
     expect(wrapper.text()).toContain('初期化: 完了')
@@ -306,7 +307,7 @@ describe('App.vue ui phase-1 flows', () => {
 
     const wrapper = mount(App)
     const client = await connectAndInitialize(wrapper)
-    openAdvancedPanel(wrapper)
+    await openAdvancedPanel(wrapper)
     await getByTestId(wrapper, 'start-thread-button').trigger('click')
     await flushPromises()
 
@@ -514,7 +515,7 @@ describe('App.vue ui phase-1 flows', () => {
 
     const wrapper = mount(App)
     const client = await connectAndInitialize(wrapper)
-    openAdvancedPanel(wrapper)
+    await openAdvancedPanel(wrapper)
     await getByTestId(wrapper, 'start-thread-button').trigger('click')
     await flushPromises()
 
@@ -1067,7 +1068,7 @@ describe('App.vue ui phase-1 flows', () => {
     const wrapper = mount(App)
     await connectAndInitialize(wrapper)
 
-    openAdvancedPanel(wrapper)
+    await openAdvancedPanel(wrapper)
     await getByTestId(wrapper, 'resume-thread-input').setValue('thread-resume-1')
     expect(getByTestId(wrapper, 'resume-thread-button').attributes('disabled')).toBeUndefined()
     await getByTestId(wrapper, 'resume-thread-button').trigger('click')
@@ -1388,7 +1389,7 @@ describe('App.vue ui phase-1 flows', () => {
     const wrapper = mount(App)
     await connectAndInitialize(wrapper)
 
-    openAdvancedPanel(wrapper)
+    await openAdvancedPanel(wrapper)
     await getByTestId(wrapper, 'start-thread-button').trigger('click')
     await flushPromises()
     await wrapper.get('textarea').setValue('Interrupt me')
@@ -1450,7 +1451,7 @@ describe('App.vue ui phase-1 flows', () => {
     const wrapper = mount(App)
     await connectAndInitialize(wrapper)
 
-    openAdvancedPanel(wrapper)
+    await openAdvancedPanel(wrapper)
 
     const modelOptions = wrapper
       .findAll('select[data-testid="model-select"] option')
@@ -1532,7 +1533,7 @@ describe('App.vue ui phase-1 flows', () => {
     expect(modelSelect.attributes('disabled')).toBeUndefined()
     await modelSelect.setValue('gpt-4o-mini')
 
-    openAdvancedPanel(wrapper)
+    await openAdvancedPanel(wrapper)
     await getByTestId(wrapper, 'start-thread-button').trigger('click')
     await flushPromises()
     await wrapper.get('textarea').setValue('Use default effort')
@@ -1594,7 +1595,7 @@ describe('App.vue ui phase-1 flows', () => {
     const wrapper = mount(App)
     await connectAndInitialize(wrapper)
 
-    openAdvancedPanel(wrapper)
+    await openAdvancedPanel(wrapper)
     const modelSelect = wrapper.get('select[data-testid="model-select"]')
     expect(modelSelect.attributes('disabled')).toBeUndefined()
     await modelSelect.setValue('gpt-4o-mini')
@@ -1641,7 +1642,7 @@ describe('App.vue ui phase-1 flows', () => {
 
     const wrapper = mount(App)
     await connectAndInitialize(wrapper)
-    openAdvancedPanel(wrapper)
+    await openAdvancedPanel(wrapper)
 
     await getByTestId(wrapper, 'resume-thread-input').setValue('thread-resume-metrics-1')
     await getByTestId(wrapper, 'resume-thread-button').trigger('click')
@@ -1678,7 +1679,7 @@ describe('App.vue ui phase-1 flows', () => {
 
     const wrapper = mount(App)
     await connectAndInitialize(wrapper)
-    openAdvancedPanel(wrapper)
+    await openAdvancedPanel(wrapper)
 
     expect(wrapper.text()).toContain('まだ設定情報はありません。')
 
@@ -1725,7 +1726,7 @@ describe('App.vue ui phase-1 flows', () => {
     await connectAndInitialize(wrapper)
     expect(getByTestId(wrapper, 'send-state-hint').text()).toContain('先に会話を開始または再開してください')
 
-    openAdvancedPanel(wrapper)
+    await openAdvancedPanel(wrapper)
     await getByTestId(wrapper, 'start-thread-button').trigger('click')
     await flushPromises()
     expect(getByTestId(wrapper, 'send-state-hint').text()).toContain('メッセージを入力してください')
@@ -1756,7 +1757,7 @@ describe('App.vue ui phase-1 flows', () => {
     const wrapper = mount(App)
     await connectAndInitialize(wrapper)
 
-    openAdvancedPanel(wrapper)
+    await openAdvancedPanel(wrapper)
     await getByTestId(wrapper, 'start-thread-button').trigger('click')
     await flushPromises()
 
@@ -1835,7 +1836,7 @@ describe('App.vue ui phase-1 flows', () => {
 
     const wrapper = mount(App)
     const client = await connectAndInitialize(wrapper)
-    openAdvancedPanel(wrapper)
+    await openAdvancedPanel(wrapper)
 
     nowSpy.mockReturnValue(10_000)
     client.emitMessage({
@@ -1882,7 +1883,7 @@ describe('App.vue ui phase-1 flows', () => {
 
     const wrapper = mount(App)
     const client = await connectAndInitialize(wrapper)
-    openAdvancedPanel(wrapper)
+    await openAdvancedPanel(wrapper)
 
     client.emitMessage({
       id: 'tool-input-1',
@@ -1938,7 +1939,7 @@ describe('App.vue ui phase-1 flows', () => {
 
     const wrapper = mount(App)
     const client = await connectAndInitialize(wrapper)
-    openAdvancedPanel(wrapper)
+    await openAdvancedPanel(wrapper)
 
     client.emitMessage({
       id: 'tool-input-cancel-1',
@@ -2063,7 +2064,7 @@ describe('App.vue ui phase-1 flows', () => {
 
     const wrapper = mount(App)
     const client = await connectAndInitialize(wrapper)
-    openAdvancedPanel(wrapper)
+    await openAdvancedPanel(wrapper)
 
     client.emitMessage({
       id: 9001,
@@ -2123,7 +2124,7 @@ describe('App.vue ui phase-1 flows', () => {
 
     const wrapper = mount(App)
     const client = await connectAndInitialize(wrapper)
-    openAdvancedPanel(wrapper)
+    await openAdvancedPanel(wrapper)
 
     nowSpy.mockReturnValue(1_000)
     client.emitMessage({
@@ -2290,7 +2291,7 @@ describe('App.vue ui phase-1 flows', () => {
 
     const wrapper = mount(App)
     const client = await connectAndInitialize(wrapper)
-    openAdvancedPanel(wrapper)
+    await openAdvancedPanel(wrapper)
 
     nowSpy.mockReturnValue(10_000)
     client.emitMessage({
@@ -2383,7 +2384,7 @@ describe('App.vue ui phase-1 flows', () => {
 
     const wrapper = mount(App)
     const client = await connectAndInitialize(wrapper)
-    openAdvancedPanel(wrapper)
+    await openAdvancedPanel(wrapper)
 
     nowSpy.mockReturnValue(20_000)
     client.emitMessage({

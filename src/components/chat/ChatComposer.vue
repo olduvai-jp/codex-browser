@@ -64,13 +64,13 @@ function onThinkingChange(event: Event) {
 <template>
   <form class="composer border-t border-border-default bg-surface px-4 py-2.5 sm:px-6" @submit.prevent="emit('send')">
     <div class="mx-auto flex w-full max-w-4xl flex-col gap-1.5">
-      <div class="rounded-[1.45rem] border border-border-default/70 bg-white/85 p-2.5 shadow-sm backdrop-blur-sm dark:border-white/10 dark:bg-[#1f1f1f]">
+      <div class="rounded-xl border border-border-default/70 bg-white/85 p-2 shadow-sm backdrop-blur-sm dark:border-white/10 dark:bg-[#1f1f1f]">
         <textarea
           :value="props.modelValue"
-          rows="2"
+          rows="1"
           placeholder="Codex に質問してみましょう。ファイルを追加するには @、コマンドには / を使用します"
           :disabled="props.disabled"
-          class="min-h-[58px] w-full resize-none border-none bg-transparent px-2.5 py-1.5 text-[0.98rem] leading-relaxed text-text-primary placeholder:text-text-tertiary/75 focus:outline-none disabled:cursor-not-allowed disabled:text-text-muted disabled:placeholder:text-text-muted"
+          class="min-h-[42px] w-full resize-none border-none bg-transparent px-2 py-1 text-sm leading-tight text-text-primary placeholder:text-text-tertiary/75 focus:outline-none disabled:cursor-not-allowed disabled:text-text-muted disabled:placeholder:text-text-muted"
           @input="onInput"
           @compositionstart="onCompositionStart"
           @compositionend="onCompositionEnd"

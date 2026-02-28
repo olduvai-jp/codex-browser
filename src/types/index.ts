@@ -159,6 +159,7 @@ export type ModelOption = {
   label: string
   supportedReasoningEfforts?: ReasoningEffort[]
   defaultReasoningEffort?: ReasoningEffort
+  isServerDefault?: boolean
 }
 
 export type UserGuidanceTone = 'info' | 'warn' | 'error'

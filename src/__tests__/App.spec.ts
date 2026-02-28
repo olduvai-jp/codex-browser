@@ -1492,6 +1492,57 @@ describe('App.vue ui phase-1 flows', () => {
     wrapper.unmount()
   })
 
+  it('renders resolved server default model label when no model is explicitly selected', async () => {
+    bridgeMock.setRequestHandler(async (method) => {
+      if (method === 'initialize') {
+        return { userAgent: 'mock-codex-agent' }
+      }
+
+      if (method === 'model/list') {
+        return {
+          data: {
+            items: [
+              {
+                model: {
+                  id: 'gpt-4o-mini',
+                  displayName: 'GPT 4o Mini',
+                  default: true,
+                },
+              },
+            ],
+          },
+        }
+      }
+
+      if (method === 'thread/start') {
+        return { thread: { id: 'thread-server-default-label-1' } }
+      }
+
+      if (method === 'turn/start') {
+        return { turn: { id: 'turn-server-default-label-1' } }
+      }
+
+      throw new Error(`Unexpected method: ${method}`)
+    })
+
+    const wrapper = mount(App)
+    await connectAndInitialize(wrapper)
+    await flushPromises()
+
+    const modelSelect = wrapper.get('select[data-testid="model-select"]')
+    expect(modelSelect.attributes('value')).toBe('gpt-4o-mini')
+    const modelSelectElement = modelSelect.element as HTMLSelectElement
+    const selectedLabel = wrapper
+      .findAll('select[data-testid="model-select"] option')
+      .find((option) => (option.element as HTMLOptionElement).value === modelSelectElement.value)?.text()
+    expect(selectedLabel).toBe('GPT 4o Mini')
+
+    await openAdvancedPanel(wrapper)
+    expect(wrapper.text()).toContain('利用モデル: gpt-4o-mini')
+
+    wrapper.unmount()
+  })
+
   it('omits effort when thinking is server default on turn/start', async () => {
     bridgeMock.setRequestHandler(async (method) => {
       if (method === 'initialize') {

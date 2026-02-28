@@ -2142,7 +2142,9 @@ function parseToolUserInputQuestions(params: Record<string, unknown>): ToolUserI
 
       const hasSelection = nextModels.some((entry) => entry.id === selectedModelId.value)
       if (!hasSelection) {
-        setSelectedModelId('')
+        const serverDefault = nextModels.find((entry) => entry.isServerDefault)
+        const fallbackModelId = serverDefault?.id || nextModels[0]!.id
+        setSelectedModelId(fallbackModelId)
       } else {
         normalizeThinkingEffortForModel(selectedModelId.value.trim())
       }
@@ -2353,7 +2355,6 @@ function parseToolUserInputQuestions(params: Record<string, unknown>): ToolUserI
     approvalDecisionAverageLabel,
     modelSelectionRateLabel,
     availableThinkingEfforts,
-
     // Methods
     connect,
     disconnect,

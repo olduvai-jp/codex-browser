@@ -94,7 +94,6 @@ function onThinkingChange(event: Event) {
               :disabled="props.settingsDisabled"
               @change="onModelChange"
             >
-              <option value="">(server default)</option>
               <option v-for="option in props.modelOptions" :key="option.id" :value="option.id">
                 {{ option.label }}
               </option>

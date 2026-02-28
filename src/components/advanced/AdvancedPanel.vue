@@ -69,7 +69,7 @@ const emit = defineEmits<{
           <p class="rounded-lg bg-surface-secondary px-3 py-1.5"><strong class="text-text-secondary">会話 ID:</strong> <code class="font-mono">{{ activeThreadId || '-' }}</code></p>
           <p class="rounded-lg bg-surface-secondary px-3 py-1.5"><strong class="text-text-secondary">ターン ID:</strong> <code class="font-mono">{{ currentTurnId || '-' }}</code></p>
           <p class="rounded-lg bg-surface-secondary px-3 py-1.5"><strong class="text-text-secondary">応答状態:</strong> {{ turnStatus }}</p>
-          <p class="rounded-lg bg-surface-secondary px-3 py-1.5"><strong class="text-text-secondary">利用モデル:</strong> <code class="font-mono">{{ selectedModelId || '(server default)' }}</code></p>
+          <p class="rounded-lg bg-surface-secondary px-3 py-1.5"><strong class="text-text-secondary">利用モデル:</strong> <code class="font-mono">{{ selectedModelId || '-' }}</code></p>
         </div>
       </section>
 

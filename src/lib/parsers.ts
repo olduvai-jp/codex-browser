@@ -58,6 +58,37 @@ export function pickArrayValue(source: Record<string, unknown>, keys: string[]):
   return []
 }
 
+function pickBooleanValue(source: Record<string, unknown>, keys: string[]): boolean | undefined {
+  for (const key of keys) {
+    const value = source[key]
+
+    if (typeof value === 'boolean') {
+      return value
+    }
+
+    if (typeof value === 'number' && Number.isFinite(value)) {
+      if (value === 0) {
+        return false
+      }
+      if (value === 1) {
+        return true
+      }
+    }
+
+    if (typeof value === 'string') {
+      const normalizedValue = value.trim().toLowerCase()
+      if (normalizedValue === 'true' || normalizedValue === '1' || normalizedValue === 'yes') {
+        return true
+      }
+      if (normalizedValue === 'false' || normalizedValue === '0' || normalizedValue === 'no') {
+        return false
+      }
+    }
+  }
+
+  return undefined
+}
+
 export function extractThreadFromReadResult(payload: unknown): Record<string, unknown> | null {
   if (!isRecord(payload)) {
     return null
@@ -261,6 +292,32 @@ export function normalizeModelOption(entry: unknown): ModelOption | null {
   const option: ModelOption = {
     id,
     label: label.trim().length > 0 ? label : id,
+  }
+  const isServerDefault =
+    pickBooleanValue(base, [
+      'isServerDefault',
+      'isDefault',
+      'is_default',
+      'default',
+      'serverDefault',
+      'server_default',
+      'isServerDefaultModel',
+      'serverDefaultModel',
+      'is_default_model',
+    ]) ??
+    pickBooleanValue(entry, [
+      'isServerDefault',
+      'isDefault',
+      'is_default',
+      'default',
+      'serverDefault',
+      'server_default',
+      'isServerDefaultModel',
+      'serverDefaultModel',
+      'is_default_model',
+    ])
+  if (isServerDefault) {
+    option.isServerDefault = true
   }
 
   if (supportedReasoningEfforts && supportedReasoningEfforts.length > 0) {

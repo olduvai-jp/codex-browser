@@ -42,6 +42,27 @@ describe('parseModelList reasoning effort aliases', () => {
       supportedReasoningEfforts: ['low', 'high'],
     })
   })
+
+  it('extracts explicit model default flag', () => {
+    const parsed = parseModelList({
+      data: {
+        items: [
+          {
+            model: {
+              id: 'model-default-flag',
+              isDefault: true,
+            },
+          },
+        ],
+      },
+    })
+
+    expect(parsed).toHaveLength(1)
+    expect(parsed[0]).toMatchObject({
+      id: 'model-default-flag',
+      isServerDefault: true,
+    })
+  })
 })
 
 describe('parseThreadHistoryList title normalization', () => {

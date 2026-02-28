@@ -51,4 +51,5 @@ describe('ChatComposer', () => {
     expect(wrapper.emitted('update:selectedModelId')).toEqual([['gpt-4o-mini']])
     expect(wrapper.emitted('update:selectedThinkingEffort')).toEqual([['high']])
   })
+
 })

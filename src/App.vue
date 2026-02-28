@@ -23,6 +23,7 @@ const {
   threadHistory,
   modelOptions,
   selectedModelId,
+  selectedThinkingEffort,
   configSnapshot,
   userGuidance,
   messages,
@@ -49,6 +50,7 @@ const {
   historyResumeRateLabel,
   approvalDecisionAverageLabel,
   modelSelectionRateLabel,
+  availableThinkingEfforts,
   connect,
   disconnect,
   quickStartConversation,
@@ -58,6 +60,8 @@ const {
   sendTurn,
   interruptTurn,
   loadModelList,
+  setSelectedModelId,
+  setSelectedThinkingEffort,
   loadConfig,
   respondToToolUserInput,
   cancelToolUserInputRequest,
@@ -120,7 +124,16 @@ onMounted(() => {
           :send-hint="sendStateHint"
           :hint-ready="canSendMessage"
           :disabled="!isConnected || !initialized || !activeThreadId || isTurnActive"
+          :settings-disabled="!isConnected || !initialized"
+          :model-options="modelOptions"
+          :selected-model-id="selectedModelId"
+          :selected-thinking-effort="selectedThinkingEffort"
+          :thinking-options="availableThinkingEfforts"
+          :can-load-model-list="isConnected && initialized"
           @update:model-value="messageInput = $event"
+          @load-model-list="loadModelList"
+          @update:selected-model-id="setSelectedModelId"
+          @update:selected-thinking-effort="setSelectedThinkingEffort"
           @send="sendTurn"
           @interrupt="interruptTurn"
         />
@@ -134,7 +147,6 @@ onMounted(() => {
       :can-resume-thread="canResumeThread"
       :is-connected="isConnected"
       :initialized="initialized"
-      :model-options="modelOptions"
       :selected-model-id="selectedModelId"
       :config-snapshot="configSnapshot"
       :logs="logs"
@@ -157,8 +169,6 @@ onMounted(() => {
       @start-thread="startThread"
       @update:resume-thread-id="resumeThreadId = $event"
       @resume-thread="resumeThread"
-      @load-model-list="loadModelList"
-      @update:selected-model-id="selectedModelId = $event"
       @load-config="loadConfig"
     />
 

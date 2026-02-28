@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import type { LogEntry, ModelOption, ToolCallEntry } from '@/types'
+import type { LogEntry, ToolCallEntry } from '@/types'
 import { stringifyDetails } from '@/lib/formatters'
 import MetricsPanel from './MetricsPanel.vue'
 import LogViewer from './LogViewer.vue'
@@ -11,7 +11,6 @@ defineProps<{
   canResumeThread: boolean
   isConnected: boolean
   initialized: boolean
-  modelOptions: ModelOption[]
   selectedModelId: string
   configSnapshot: unknown | null
   logs: LogEntry[]
@@ -39,8 +38,6 @@ const emit = defineEmits<{
   'start-thread': []
   'update:resumeThreadId': [value: string]
   'resume-thread': []
-  'load-model-list': []
-  'update:selectedModelId': [value: string]
   'load-config': []
 }>()
 </script>
@@ -106,34 +103,9 @@ const emit = defineEmits<{
         </div>
       </section>
 
-      <!-- Model & Config -->
+      <!-- Config -->
       <section>
-        <h3 class="text-sm font-semibold text-text-primary">モデルと設定</h3>
-        <div class="mt-2 flex flex-wrap items-end gap-3">
-          <button
-            class="rounded-lg bg-text-primary px-3 py-2 text-xs font-medium text-surface transition-colors hover:bg-text-primary/80 disabled:opacity-40"
-            data-testid="load-model-list-button"
-            :disabled="!isConnected || !initialized"
-            @click="emit('load-model-list')"
-          >
-            モデル候補を更新
-          </button>
-          <label class="flex min-w-48 flex-1 flex-col gap-1">
-            <span class="text-xs text-text-tertiary">利用モデル</span>
-            <select
-              :value="selectedModelId"
-              data-testid="model-select"
-              :disabled="modelOptions.length === 0"
-              class="rounded-lg border border-border-default bg-surface-secondary px-3 py-2 text-xs text-text-primary focus:border-accent focus:ring-1 focus:ring-accent focus:outline-none"
-              @change="emit('update:selectedModelId', ($event.target as HTMLSelectElement).value)"
-            >
-              <option value="">(server default)</option>
-              <option v-for="option in modelOptions" :key="option.id" :value="option.id">
-                {{ option.label }}
-              </option>
-            </select>
-          </label>
-        </div>
+        <h3 class="text-sm font-semibold text-text-primary">設定</h3>
 
         <div class="mt-3">
           <button

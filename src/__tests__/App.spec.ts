@@ -688,7 +688,7 @@ describe('App.vue ui phase-1 flows', () => {
     wrapper.unmount()
   })
 
-  it('loads model/list options and sends selected model on turn/start', async () => {
+  it('loads model/list options and sends selected model + effort on turn/start', async () => {
     bridgeMock.setRequestHandler(async (method) => {
       if (method === 'initialize') {
         return { userAgent: 'mock-codex-agent' }
@@ -702,6 +702,8 @@ describe('App.vue ui phase-1 flows', () => {
                 model: {
                   id: 'gpt-4o-mini',
                   displayName: 'GPT 4o Mini',
+                  supportedReasoningEfforts: ['low', 'medium', 'high'],
+                  defaultReasoningEffort: 'medium',
                 },
               },
               'o3-mini',
@@ -734,7 +736,13 @@ describe('App.vue ui phase-1 flows', () => {
     expect(modelOptions).toContain('GPT 4o Mini')
     expect(modelOptions).toContain('o3-mini')
 
-    await wrapper.get('select[data-testid="model-select"]').setValue('gpt-4o-mini')
+    const modelSelect = wrapper.get('select[data-testid="model-select"]')
+    const thinkingSelect = wrapper.get('select[data-testid="thinking-effort-select"]')
+    expect(modelSelect.attributes('disabled')).toBeUndefined()
+    expect(thinkingSelect.attributes('disabled')).toBeUndefined()
+
+    await modelSelect.setValue('gpt-4o-mini')
+    await thinkingSelect.setValue('high')
     expect(wrapper.text()).toContain('利用モデル: gpt-4o-mini')
 
     await getByTestId(wrapper, 'start-thread-button').trigger('click')
@@ -751,6 +759,74 @@ describe('App.vue ui phase-1 flows', () => {
         {
           type: 'text',
           text: 'Use selected model',
+          text_elements: [],
+        },
+      ],
+      model: 'gpt-4o-mini',
+      effort: 'high',
+    })
+
+    wrapper.unmount()
+  })
+
+  it('omits effort when thinking is server default on turn/start', async () => {
+    bridgeMock.setRequestHandler(async (method) => {
+      if (method === 'initialize') {
+        return { userAgent: 'mock-codex-agent' }
+      }
+
+      if (method === 'model/list') {
+        return {
+          data: {
+            items: [
+              {
+                model: {
+                  id: 'gpt-4o-mini',
+                  displayName: 'GPT 4o Mini',
+                  supportedReasoningEfforts: ['low', 'medium', 'high'],
+                  defaultReasoningEffort: 'medium',
+                },
+              },
+            ],
+          },
+        }
+      }
+
+      if (method === 'thread/start') {
+        return { thread: { id: 'thread-model-default-effort-1' } }
+      }
+
+      if (method === 'turn/start') {
+        return { turn: { id: 'turn-model-default-effort-1' } }
+      }
+
+      throw new Error(`Unexpected method: ${method}`)
+    })
+
+    const wrapper = mount(App)
+    await connectAndInitialize(wrapper)
+
+    await getByTestId(wrapper, 'load-model-list-button').trigger('click')
+    await flushPromises()
+    const modelSelect = wrapper.get('select[data-testid="model-select"]')
+    expect(modelSelect.attributes('disabled')).toBeUndefined()
+    await modelSelect.setValue('gpt-4o-mini')
+
+    openAdvancedPanel(wrapper)
+    await getByTestId(wrapper, 'start-thread-button').trigger('click')
+    await flushPromises()
+    await wrapper.get('textarea').setValue('Use default effort')
+    await wrapper.get('form.composer').trigger('submit')
+    await flushPromises()
+
+    const turnStartCall = findRequestCall('turn/start')
+    expect(turnStartCall).toBeDefined()
+    expect(turnStartCall?.params).toEqual({
+      threadId: 'thread-model-default-effort-1',
+      input: [
+        {
+          type: 'text',
+          text: 'Use default effort',
           text_elements: [],
         },
       ],
@@ -801,7 +877,9 @@ describe('App.vue ui phase-1 flows', () => {
     openAdvancedPanel(wrapper)
     await getByTestId(wrapper, 'load-model-list-button').trigger('click')
     await flushPromises()
-    await wrapper.get('select[data-testid="model-select"]').setValue('gpt-4o-mini')
+    const modelSelect = wrapper.get('select[data-testid="model-select"]')
+    expect(modelSelect.attributes('disabled')).toBeUndefined()
+    await modelSelect.setValue('gpt-4o-mini')
     await getByTestId(wrapper, 'start-thread-button').trigger('click')
     await flushPromises()
 

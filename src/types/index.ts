@@ -5,6 +5,15 @@ export type { ApprovalDecision, ApprovalMethod, ApprovalRequest } from '@/lib/ap
 
 export type ConnectionState = 'disconnected' | 'connecting' | 'connected'
 export type TurnStatus = 'idle' | 'inProgress' | 'completed' | 'failed' | 'interrupted'
+export const REASONING_EFFORT_VALUES = [
+  'none',
+  'minimal',
+  'low',
+  'medium',
+  'high',
+  'xhigh',
+] as const
+export type ReasoningEffort = (typeof REASONING_EFFORT_VALUES)[number]
 
 export type UiMessage = {
   id: string
@@ -80,6 +89,8 @@ export type ThreadHistoryEntry = {
 export type ModelOption = {
   id: string
   label: string
+  supportedReasoningEfforts?: ReasoningEffort[]
+  defaultReasoningEffort?: ReasoningEffort
 }
 
 export type UserGuidanceTone = 'info' | 'warn' | 'error'

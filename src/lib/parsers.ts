@@ -1,4 +1,6 @@
-import type { JsonRpcId, ModelOption, ThreadHistoryEntry } from '@/types'
+import { REASONING_EFFORT_VALUES, type JsonRpcId, type ModelOption, type ReasoningEffort, type ThreadHistoryEntry } from '@/types'
+
+const REASONING_EFFORT_SET = new Set<string>(REASONING_EFFORT_VALUES)
 
 export function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null
@@ -184,11 +186,46 @@ export function normalizeModelOption(entry: unknown): ModelOption | null {
     pickStringValue(base, ['label', 'displayName', 'title', 'name'], { trim: false }) ??
     pickStringValue(entry, ['label', 'displayName', 'title', 'name'], { trim: false }) ??
     id
+  const supportedReasoningEfforts =
+    parseReasoningEffortList(base, [
+      'supportedReasoningEfforts',
+      'supported_reasoning_efforts',
+      'reasoningEfforts',
+      'reasoning_efforts',
+    ]) ||
+    parseReasoningEffortList(entry, [
+      'supportedReasoningEfforts',
+      'supported_reasoning_efforts',
+      'reasoningEfforts',
+      'reasoning_efforts',
+    ])
+  const defaultReasoningEffort =
+    parseReasoningEffort(base, [
+      'defaultReasoningEffort',
+      'default_reasoning_effort',
+      'reasoningEffort',
+      'reasoning_effort',
+    ]) ??
+    parseReasoningEffort(entry, [
+      'defaultReasoningEffort',
+      'default_reasoning_effort',
+      'reasoningEffort',
+      'reasoning_effort',
+    ])
 
-  return {
+  const option: ModelOption = {
     id,
     label: label.trim().length > 0 ? label : id,
   }
+
+  if (supportedReasoningEfforts && supportedReasoningEfforts.length > 0) {
+    option.supportedReasoningEfforts = supportedReasoningEfforts
+  }
+  if (defaultReasoningEffort) {
+    option.defaultReasoningEffort = defaultReasoningEffort
+  }
+
+  return option
 }
 
 export function parseModelList(payload: unknown): ModelOption[] {
@@ -212,6 +249,50 @@ export function parseModelList(payload: unknown): ModelOption[] {
     deduped.set(option.id, option)
   }
   return [...deduped.values()]
+}
+
+function parseReasoningEffort(source: Record<string, unknown>, keys: string[]): ReasoningEffort | undefined {
+  for (const key of keys) {
+    const rawValue = source[key]
+    if (typeof rawValue !== 'string') {
+      continue
+    }
+
+    const value = rawValue.trim()
+    if (value.length === 0) {
+      continue
+    }
+    if (REASONING_EFFORT_SET.has(value)) {
+      return value as ReasoningEffort
+    }
+  }
+
+  return undefined
+}
+
+function parseReasoningEffortList(
+  source: Record<string, unknown>,
+  keys: string[],
+): ReasoningEffort[] | undefined {
+  for (const key of keys) {
+    const value = source[key]
+    if (!Array.isArray(value)) {
+      continue
+    }
+
+    const parsed = value
+      .filter((entry): entry is string => typeof entry === 'string')
+      .map((entry) => entry.trim())
+      .filter((entry): entry is ReasoningEffort => REASONING_EFFORT_SET.has(entry))
+
+    if (parsed.length === 0) {
+      continue
+    }
+
+    return [...new Set(parsed)]
+  }
+
+  return undefined
 }
 
 export function extractConfigPayload(payload: unknown): unknown {

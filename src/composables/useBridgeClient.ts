@@ -17,11 +17,13 @@ import {
   parseThreadHistoryList,
   pickStringValue,
 } from '@/lib/parsers'
+import { REASONING_EFFORT_VALUES } from '@/types'
 import type {
   ApprovalMethodExplanation,
   ConnectionState,
   LogEntry,
   ModelOption,
+  ReasoningEffort,
   ThreadHistoryEntry,
   ToolCallEntry,
   ToolCallEvent,
@@ -38,9 +40,14 @@ const DEFAULT_WS_URL = 'ws://127.0.0.1:8787/bridge'
 const MAX_THREAD_HISTORY_ENTRIES = 50
 const MAX_TOOL_CALL_ENTRIES = 100
 const MAX_TOOL_CALL_EVENTS = 40
+const REASONING_EFFORT_SET = new Set<string>(REASONING_EFFORT_VALUES)
 
 type ToolItemType = 'commandExecution' | 'fileChange' | 'mcpToolCall'
 type ToolUserInputAnswers = Record<string, { answers: string[] }>
+
+function isReasoningEffort(value: string): value is ReasoningEffort {
+  return REASONING_EFFORT_SET.has(value)
+}
 
 function normalizeToolItemType(value: unknown): ToolItemType | null {
   if (value === 'commandExecution' || value === 'fileChange' || value === 'mcpToolCall') {
@@ -166,6 +173,7 @@ export function useBridgeClient() {
   const threadHistory = ref<ThreadHistoryEntry[]>([])
   const modelOptions = ref<ModelOption[]>([])
   const selectedModelId = ref('')
+  const selectedThinkingEffort = ref<ReasoningEffort | ''>('')
   const configSnapshot = ref<unknown | null>(null)
   const quickStartInProgress = ref(false)
   const userGuidance = ref<UserGuidance | null>(null)
@@ -194,6 +202,69 @@ export function useBridgeClient() {
   let logSequence = 1
   let toolCallSequence = 1
   let toolCallEventSequence = 1
+
+  function getModelOption(modelId: string): ModelOption | null {
+    if (modelId.length === 0) {
+      return null
+    }
+
+    return modelOptions.value.find((entry) => entry.id === modelId) ?? null
+  }
+
+  function getSupportedThinkingEfforts(modelId: string): ReasoningEffort[] {
+    const modelOption = getModelOption(modelId)
+    if (modelOption?.supportedReasoningEfforts && modelOption.supportedReasoningEfforts.length > 0) {
+      return modelOption.supportedReasoningEfforts
+    }
+
+    return [...REASONING_EFFORT_VALUES]
+  }
+
+  function normalizeThinkingEffortForModel(modelId: string): void {
+    const selectedEffort = selectedThinkingEffort.value
+    if (!selectedEffort) {
+      return
+    }
+
+    const supportedEfforts = getSupportedThinkingEfforts(modelId)
+    if (supportedEfforts.includes(selectedEffort)) {
+      return
+    }
+
+    const modelOption = getModelOption(modelId)
+    const fallbackEffort = modelOption?.defaultReasoningEffort
+    if (fallbackEffort && supportedEfforts.includes(fallbackEffort)) {
+      selectedThinkingEffort.value = fallbackEffort
+      return
+    }
+
+    selectedThinkingEffort.value = ''
+  }
+
+  function setSelectedModelId(value: string): void {
+    const modelId = value.trim()
+    selectedModelId.value = modelId
+    normalizeThinkingEffortForModel(modelId)
+  }
+
+  function setSelectedThinkingEffort(value: string): void {
+    const effort = value.trim()
+    if (effort.length === 0 || !isReasoningEffort(effort)) {
+      selectedThinkingEffort.value = ''
+      return
+    }
+
+    const supportedEfforts = getSupportedThinkingEfforts(selectedModelId.value.trim())
+    if (supportedEfforts.includes(effort)) {
+      selectedThinkingEffort.value = effort
+      return
+    }
+
+    const modelOption = getModelOption(selectedModelId.value.trim())
+    const fallbackEffort = modelOption?.defaultReasoningEffort
+    selectedThinkingEffort.value =
+      fallbackEffort && supportedEfforts.includes(fallbackEffort) ? fallbackEffort : ''
+  }
 
   // Computed
   const isConnected = computed(() => connectionState.value === 'connected')
@@ -240,6 +311,9 @@ export function useBridgeClient() {
   )
   const modelSelectionRate = computed(() =>
     turnStartCount.value === 0 ? 0 : (turnStartWithModelCount.value / turnStartCount.value) * 100,
+  )
+  const availableThinkingEfforts = computed<ReasoningEffort[]>(() =>
+    getSupportedThinkingEfforts(selectedModelId.value.trim()),
   )
   const firstSendDurationLabel = computed(() =>
     firstSendDurationMs.value === null ? '未計測' : formatDurationMs(firstSendDurationMs.value),
@@ -1415,6 +1489,9 @@ function parseToolUserInputQuestions(params: Record<string, unknown>): ToolUserI
         turnStartWithModelCount.value += 1
         payload.model = modelId
       }
+      if (selectedThinkingEffort.value.length > 0) {
+        payload.effort = selectedThinkingEffort.value
+      }
 
       const response = await client.value.request('turn/start', payload)
 
@@ -1499,14 +1576,16 @@ function parseToolUserInputQuestions(params: Record<string, unknown>): ToolUserI
       modelOptions.value = nextModels
 
       if (nextModels.length === 0) {
-        selectedModelId.value = ''
+        setSelectedModelId('')
         pushLog('rpc', 'info', 'model/list completed (0 models)', response)
         return
       }
 
       const hasSelection = nextModels.some((entry) => entry.id === selectedModelId.value)
       if (!hasSelection) {
-        selectedModelId.value = ''
+        setSelectedModelId('')
+      } else {
+        normalizeThinkingEffortForModel(selectedModelId.value.trim())
       }
       pushLog('rpc', 'info', `model/list completed (${nextModels.length} models)`, response)
     } catch (error) {
@@ -1676,6 +1755,7 @@ function parseToolUserInputQuestions(params: Record<string, unknown>): ToolUserI
     threadHistory,
     modelOptions,
     selectedModelId,
+    selectedThinkingEffort,
     configSnapshot,
     quickStartInProgress,
     userGuidance,
@@ -1709,6 +1789,7 @@ function parseToolUserInputQuestions(params: Record<string, unknown>): ToolUserI
     historyResumeRateLabel,
     approvalDecisionAverageLabel,
     modelSelectionRateLabel,
+    availableThinkingEfforts,
 
     // Methods
     connect,
@@ -1721,6 +1802,8 @@ function parseToolUserInputQuestions(params: Record<string, unknown>): ToolUserI
     sendTurn,
     interruptTurn,
     loadModelList,
+    setSelectedModelId,
+    setSelectedThinkingEffort,
     loadConfig,
     respondToToolUserInput,
     cancelToolUserInputRequest,

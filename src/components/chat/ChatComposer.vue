@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { ref } from 'vue'
+import type { ModelOption, ReasoningEffort } from '@/types'
 
 const props = defineProps<{
   modelValue: string
@@ -8,12 +9,21 @@ const props = defineProps<{
   sendHint: string
   hintReady: boolean
   disabled: boolean
+  settingsDisabled: boolean
+  modelOptions: ModelOption[]
+  selectedModelId: string
+  selectedThinkingEffort: ReasoningEffort | ''
+  thinkingOptions: ReasoningEffort[]
+  canLoadModelList: boolean
 }>()
 
 const emit = defineEmits<{
   'update:modelValue': [value: string]
+  'update:selectedModelId': [value: string]
+  'update:selectedThinkingEffort': [value: string]
   send: []
   interrupt: []
+  'load-model-list': []
 }>()
 
 function onInput(event: Event) {
@@ -40,6 +50,16 @@ function onEnterKeydown(event: KeyboardEvent) {
   if (props.canSend) {
     emit('send')
   }
+}
+
+function onModelChange(event: Event) {
+  const target = event.target as HTMLSelectElement
+  emit('update:selectedModelId', target.value)
+}
+
+function onThinkingChange(event: Event) {
+  const target = event.target as HTMLSelectElement
+  emit('update:selectedThinkingEffort', target.value)
 }
 </script>
 
@@ -84,5 +104,48 @@ function onEnterKeydown(event: KeyboardEvent) {
     >
       {{ props.sendHint }}
     </p>
+    <div class="mt-3 grid gap-2 sm:grid-cols-[auto,minmax(0,1fr),minmax(0,1fr)]">
+      <button
+        type="button"
+        data-testid="load-model-list-button"
+        class="rounded-lg bg-text-primary px-3 py-2 text-xs font-medium text-surface transition-colors hover:bg-text-primary/80 disabled:opacity-40"
+        :disabled="!props.canLoadModelList"
+        @click="emit('load-model-list')"
+      >
+        モデル候補を更新
+      </button>
+
+      <label class="flex min-w-0 flex-col gap-1">
+        <span class="text-xs text-text-tertiary">model</span>
+        <select
+          :value="props.selectedModelId"
+          data-testid="model-select"
+          class="rounded-lg border border-border-default bg-surface-secondary px-3 py-2 text-xs text-text-primary focus:border-accent focus:ring-1 focus:ring-accent focus:outline-none disabled:opacity-50"
+          :disabled="props.settingsDisabled"
+          @change="onModelChange"
+        >
+          <option value="">(server default)</option>
+          <option v-for="option in props.modelOptions" :key="option.id" :value="option.id">
+            {{ option.label }}
+          </option>
+        </select>
+      </label>
+
+      <label class="flex min-w-0 flex-col gap-1">
+        <span class="text-xs text-text-tertiary">thinking</span>
+        <select
+          :value="props.selectedThinkingEffort"
+          data-testid="thinking-effort-select"
+          class="rounded-lg border border-border-default bg-surface-secondary px-3 py-2 text-xs text-text-primary focus:border-accent focus:ring-1 focus:ring-accent focus:outline-none disabled:opacity-50"
+          :disabled="props.settingsDisabled"
+          @change="onThinkingChange"
+        >
+          <option value="">(server default)</option>
+          <option v-for="effort in props.thinkingOptions" :key="effort" :value="effort">
+            {{ effort }}
+          </option>
+        </select>
+      </label>
+    </div>
   </form>
 </template>

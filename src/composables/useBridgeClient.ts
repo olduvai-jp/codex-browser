@@ -167,6 +167,7 @@ export function useBridgeClient() {
   const activeThreadId = ref('')
   const resumeThreadId = ref('')
   const selectedHistoryThreadId = ref('')
+  const readPreviewThreadId = ref('')
   const messageInput = ref('')
   const currentTurnId = ref('')
   const turnStatus = ref<TurnStatus>('idle')
@@ -195,6 +196,9 @@ export function useBridgeClient() {
 
   const client = ref<BridgeRpcClient | null>(null)
   const assistantMessageIndexByItemId = new Map<string, number>()
+  const assistantAnswerByItemId = new Map<string, string>()
+  const reasoningSummaryByTurnId = new Map<string, string>()
+  const reasoningTurnIdByItemId = new Map<string, string>()
   const approvalRequestedAtMsById = new Map<string, number>()
   const toolCallEntryIdByLookupKey = new Map<string, string>()
 
@@ -278,6 +282,10 @@ export function useBridgeClient() {
       isConnected.value &&
       initialized.value &&
       activeThreadId.value.trim().length > 0 &&
+      !(
+        readPreviewThreadId.value.trim().length > 0 &&
+        readPreviewThreadId.value.trim() !== activeThreadId.value.trim()
+      ) &&
       messageInput.value.trim().length > 0 &&
       !isTurnActive.value,
   )
@@ -332,6 +340,12 @@ export function useBridgeClient() {
     }
     if (activeThreadId.value.trim().length === 0) {
       return '先に会話を開始または再開してください。'
+    }
+    if (
+      readPreviewThreadId.value.trim().length > 0 &&
+      readPreviewThreadId.value.trim() !== activeThreadId.value.trim()
+    ) {
+      return '履歴プレビュー中のため送信できません。会話を再開または新規作成してください。'
     }
     if (isTurnActive.value) {
       return '応答生成中は新しいメッセージを送信できません。'
@@ -676,10 +690,184 @@ function parseToolUserInputQuestions(params: Record<string, unknown>): ToolUserI
   ]
 }
 
+  function composeAssistantDisplayText(summary: string, answer: string): string {
+    if (summary.length > 0 && answer.length > 0) {
+      return `${summary}\n\n${answer}`
+    }
+
+    if (summary.length > 0) {
+      return summary
+    }
+
+    return answer
+  }
+
+  function normalizeTurnId(turnId?: string): string | null {
+    if (typeof turnId !== 'string') {
+      return null
+    }
+
+    const normalized = turnId.trim()
+    return normalized.length > 0 ? normalized : null
+  }
+
+  function appendWithOverlapGuard(base: string, addition: string): string {
+    if (addition.length === 0 || base.endsWith(addition)) {
+      return base
+    }
+
+    const maxOverlap = Math.min(base.length, addition.length)
+    for (let overlap = maxOverlap; overlap > 0; overlap -= 1) {
+      const baseSuffix = base.slice(-overlap)
+      const additionPrefix = addition.slice(0, overlap)
+      if (baseSuffix === additionPrefix) {
+        return base + addition.slice(overlap)
+      }
+    }
+
+    return base + addition
+  }
+
+  function extractReasoningSummaryPartText(part: unknown): string {
+    if (typeof part === 'string') {
+      return part
+    }
+    if (!isRecord(part)) {
+      return ''
+    }
+
+    const directText = pickStringValue(part, ['text', 'summaryText', 'summary_text', 'summary'], {
+      trim: false,
+    })
+    if (typeof directText === 'string' && directText.length > 0) {
+      return directText
+    }
+
+    if (isRecord(part.part)) {
+      return extractReasoningSummaryPartText(part.part)
+    }
+
+    return ''
+  }
+
+  function extractReasoningSummaryTextFromItem(item: Record<string, unknown>): string {
+    if (typeof item.summary === 'string' && item.summary.length > 0) {
+      return item.summary
+    }
+
+    if (Array.isArray(item.summary)) {
+      const summaryText = item.summary.map((part) => extractReasoningSummaryPartText(part)).join('')
+      if (summaryText.length > 0) {
+        return summaryText
+      }
+    }
+
+    if (Array.isArray(item.content)) {
+      return item.content.map((part) => extractReasoningSummaryPartText(part)).join('')
+    }
+
+    return ''
+  }
+
+  function extractReasoningSummaryPartTextFromParams(params: Record<string, unknown>): string {
+    const directText = pickStringValue(
+      params,
+      ['summaryPart', 'summary_part', 'text', 'summaryText', 'summary'],
+      {
+        trim: false,
+      },
+    )
+    if (typeof directText === 'string' && directText.length > 0) {
+      return directText
+    }
+
+    if (isRecord(params.summaryPart)) {
+      const text = extractReasoningSummaryPartText(params.summaryPart)
+      if (text.length > 0) {
+        return text
+      }
+    }
+
+    if (isRecord(params.part)) {
+      const text = extractReasoningSummaryPartText(params.part)
+      if (text.length > 0) {
+        return text
+      }
+    }
+
+    return ''
+  }
+
+  function composeAssistantTextForItem(itemId: string, turnId?: string): string {
+    const normalizedTurnId = normalizeTurnId(turnId)
+    const summary = normalizedTurnId ? reasoningSummaryByTurnId.get(normalizedTurnId) ?? '' : ''
+    const answer = assistantAnswerByItemId.get(itemId) ?? ''
+    return composeAssistantDisplayText(summary, answer)
+  }
+
+  function refreshAssistantMessage(itemId: string, turnId?: string): void {
+    const index = ensureAssistantMessage(itemId, turnId)
+    const current = messages.value[index]
+    if (!current) {
+      return
+    }
+
+    const resolvedTurnId = normalizeTurnId(turnId) ?? normalizeTurnId(current.turnId)
+    if (resolvedTurnId) {
+      current.turnId = resolvedTurnId
+    }
+    current.text = composeAssistantTextForItem(itemId, current.turnId)
+  }
+
+  function refreshAssistantMessagesForTurn(turnId: string): void {
+    for (const message of messages.value) {
+      if (message.role !== 'assistant' || message.turnId !== turnId || typeof message.itemId !== 'string') {
+        continue
+      }
+
+      message.text = composeAssistantTextForItem(message.itemId, turnId)
+    }
+  }
+
+  function appendReasoningSummary(turnId: string, text: string, deduplicateOverlap = false): void {
+    if (text.length === 0) {
+      return
+    }
+
+    const current = reasoningSummaryByTurnId.get(turnId) ?? ''
+    const next = deduplicateOverlap ? appendWithOverlapGuard(current, text) : current + text
+    if (next === current) {
+      return
+    }
+
+    reasoningSummaryByTurnId.set(turnId, next)
+    refreshAssistantMessagesForTurn(turnId)
+  }
+
+  function resolveReasoningTurnId(itemId: string | null, turnId?: string): string | null {
+    const normalizedTurnId = normalizeTurnId(turnId)
+    if (normalizedTurnId) {
+      if (itemId) {
+        reasoningTurnIdByItemId.set(itemId, normalizedTurnId)
+      }
+      return normalizedTurnId
+    }
+
+    if (!itemId) {
+      return null
+    }
+
+    return reasoningTurnIdByItemId.get(itemId) ?? null
+  }
+
   function resetConversation(): void {
     messages.value = []
     assistantMessageIndexByItemId.clear()
+    assistantAnswerByItemId.clear()
+    reasoningSummaryByTurnId.clear()
+    reasoningTurnIdByItemId.clear()
     clearToolCalls()
+    readPreviewThreadId.value = ''
     currentTurnId.value = ''
     turnStatus.value = 'idle'
   }
@@ -694,14 +882,20 @@ function parseToolUserInputQuestions(params: Record<string, unknown>): ToolUserI
   function ensureAssistantMessage(itemId: string, turnId?: string): number {
     const existingIndex = assistantMessageIndexByItemId.get(itemId)
     if (typeof existingIndex === 'number') {
+      const current = messages.value[existingIndex]
+      const normalizedTurnId = normalizeTurnId(turnId)
+      if (current && normalizedTurnId) {
+        current.turnId = normalizedTurnId
+      }
       return existingIndex
     }
 
+    const normalizedTurnId = normalizeTurnId(turnId) ?? undefined
     addMessage({
       id: makeUiMessageId('assistant'),
       role: 'assistant',
       itemId,
-      turnId,
+      turnId: normalizedTurnId,
       text: '',
       streaming: true,
     })
@@ -710,13 +904,19 @@ function parseToolUserInputQuestions(params: Record<string, unknown>): ToolUserI
   }
 
   function appendAssistantDelta(itemId: string, delta: string, turnId?: string): void {
-    const index = ensureAssistantMessage(itemId, turnId)
+    const currentAnswer = assistantAnswerByItemId.get(itemId) ?? ''
+    assistantAnswerByItemId.set(itemId, currentAnswer + delta)
+    refreshAssistantMessage(itemId, turnId)
+    const index = assistantMessageIndexByItemId.get(itemId)
+    if (typeof index !== 'number') {
+      return
+    }
+
     const current = messages.value[index]
     if (!current) {
       return
     }
 
-    current.text += delta
     current.streaming = true
   }
 
@@ -727,15 +927,23 @@ function parseToolUserInputQuestions(params: Record<string, unknown>): ToolUserI
     }
 
     const text = typeof item.text === 'string' ? item.text : ''
-    const index = ensureAssistantMessage(itemId, turnId)
+    if (text.length > 0) {
+      assistantAnswerByItemId.set(itemId, text)
+    } else if (!assistantAnswerByItemId.has(itemId)) {
+      assistantAnswerByItemId.set(itemId, '')
+    }
+
+    refreshAssistantMessage(itemId, turnId)
+    const index = assistantMessageIndexByItemId.get(itemId)
+    if (typeof index !== 'number') {
+      return
+    }
+
     const current = messages.value[index]
     if (!current) {
       return
     }
 
-    if (text.length > 0) {
-      current.text = text
-    }
     current.streaming = false
   }
 
@@ -743,14 +951,19 @@ function parseToolUserInputQuestions(params: Record<string, unknown>): ToolUserI
     const turns = Array.isArray(thread.turns) ? thread.turns : []
     const hydratedMessages: UiMessage[] = []
     const newItemIndexMap = new Map<string, number>()
+    const newAssistantAnswerByItemId = new Map<string, string>()
+    const newReasoningSummaryByTurnId = new Map<string, string>()
+    const newReasoningTurnIdByItemId = new Map<string, string>()
+    const assistantAnswerByMessageIndex = new Map<number, string>()
 
     for (const turn of turns) {
       if (!isRecord(turn)) {
         continue
       }
 
-      const turnId = typeof turn.id === 'string' ? turn.id : undefined
+      const turnId = normalizeTurnId(typeof turn.id === 'string' ? turn.id : undefined) ?? undefined
       const items = Array.isArray(turn.items) ? turn.items : []
+      const turnAssistantMessageIndices: number[] = []
 
       for (const item of items) {
         if (!isRecord(item)) {
@@ -776,21 +989,52 @@ function parseToolUserInputQuestions(params: Record<string, unknown>): ToolUserI
           }
         }
 
+        if (itemType === 'reasoning') {
+          const reasoningItemId = typeof item.id === 'string' ? item.id : null
+          if (turnId && reasoningItemId) {
+            newReasoningTurnIdByItemId.set(reasoningItemId, turnId)
+          }
+
+          const summaryText = extractReasoningSummaryTextFromItem(item)
+          if (turnId && summaryText.length > 0) {
+            const currentSummary = newReasoningSummaryByTurnId.get(turnId) ?? ''
+            const nextSummary = appendWithOverlapGuard(currentSummary, summaryText)
+            if (nextSummary !== currentSummary) {
+              newReasoningSummaryByTurnId.set(turnId, nextSummary)
+              for (const assistantMessageIndex of turnAssistantMessageIndices) {
+                const assistantMessage = hydratedMessages[assistantMessageIndex]
+                if (!assistantMessage || assistantMessage.role !== 'assistant') {
+                  continue
+                }
+
+                const answer = assistantAnswerByMessageIndex.get(assistantMessageIndex) ?? ''
+                assistantMessage.text = composeAssistantDisplayText(nextSummary, answer)
+              }
+            }
+          }
+        }
+
         if (itemType === 'agentMessage') {
-          const text = typeof item.text === 'string' ? item.text : ''
+          const answerText = typeof item.text === 'string' ? item.text : ''
           const itemId = typeof item.id === 'string' ? item.id : undefined
+          const summaryText = turnId ? newReasoningSummaryByTurnId.get(turnId) ?? '' : ''
+          const composedText = composeAssistantDisplayText(summaryText, answerText)
 
           hydratedMessages.push({
             id: makeUiMessageId('assistant'),
             role: 'assistant',
             itemId,
             turnId,
-            text,
+            text: composedText,
             streaming: false,
           })
+          const messageIndex = hydratedMessages.length - 1
+          assistantAnswerByMessageIndex.set(messageIndex, answerText)
+          turnAssistantMessageIndices.push(messageIndex)
 
           if (itemId) {
-            newItemIndexMap.set(itemId, hydratedMessages.length - 1)
+            newItemIndexMap.set(itemId, messageIndex)
+            newAssistantAnswerByItemId.set(itemId, answerText)
           }
         }
       }
@@ -800,6 +1044,18 @@ function parseToolUserInputQuestions(params: Record<string, unknown>): ToolUserI
     assistantMessageIndexByItemId.clear()
     for (const [itemId, index] of newItemIndexMap.entries()) {
       assistantMessageIndexByItemId.set(itemId, index)
+    }
+    assistantAnswerByItemId.clear()
+    for (const [itemId, text] of newAssistantAnswerByItemId.entries()) {
+      assistantAnswerByItemId.set(itemId, text)
+    }
+    reasoningSummaryByTurnId.clear()
+    for (const [turnId, summaryText] of newReasoningSummaryByTurnId.entries()) {
+      reasoningSummaryByTurnId.set(turnId, summaryText)
+    }
+    reasoningTurnIdByItemId.clear()
+    for (const [itemId, turnId] of newReasoningTurnIdByItemId.entries()) {
+      reasoningTurnIdByItemId.set(itemId, turnId)
     }
   }
 
@@ -819,6 +1075,7 @@ function parseToolUserInputQuestions(params: Record<string, unknown>): ToolUserI
       currentTurnId.value = ''
       turnStatus.value = 'idle'
     }
+    readPreviewThreadId.value = ''
 
     if (resolvedThreadId) {
       activeThreadId.value = resolvedThreadId
@@ -995,8 +1252,13 @@ function parseToolUserInputQuestions(params: Record<string, unknown>): ToolUserI
     if (method === 'item/started' && isRecord(params) && isRecord(params.item)) {
       const item = params.item
       const turnId = pickStringValue(params, ['turnId']) ?? undefined
+      const normalizedTurnId = normalizeTurnId(turnId)
       if (item.type === 'agentMessage' && typeof item.id === 'string') {
         ensureAssistantMessage(item.id, turnId)
+        refreshAssistantMessage(item.id, turnId)
+      }
+      if (item.type === 'reasoning' && typeof item.id === 'string' && normalizedTurnId) {
+        reasoningTurnIdByItemId.set(item.id, normalizedTurnId)
       }
 
       const toolItemType = normalizeToolItemType(item.type)
@@ -1020,6 +1282,31 @@ function parseToolUserInputQuestions(params: Record<string, unknown>): ToolUserI
           itemId: itemId ?? null,
           turnId: turnId ?? null,
         })
+      }
+      return
+    }
+
+    if (method === 'item/reasoning/summaryTextDelta' && isRecord(params)) {
+      const itemId = pickStringValue(params, ['itemId', 'item_id']) ?? null
+      const turnId = resolveReasoningTurnId(itemId, pickStringValue(params, ['turnId']) ?? undefined)
+      const delta =
+        pickStringValue(params, ['delta', 'summaryTextDelta', 'summary_text_delta', 'textDelta', 'text'], {
+          trim: false,
+        }) ?? ''
+
+      if (turnId && delta.length > 0) {
+        appendReasoningSummary(turnId, delta)
+      }
+      return
+    }
+
+    if (method === 'item/reasoning/summaryPartAdded' && isRecord(params)) {
+      const itemId = pickStringValue(params, ['itemId', 'item_id']) ?? null
+      const turnId = resolveReasoningTurnId(itemId, pickStringValue(params, ['turnId']) ?? undefined)
+      const summaryPartText = extractReasoningSummaryPartTextFromParams(params)
+
+      if (turnId && summaryPartText.length > 0) {
+        appendReasoningSummary(turnId, summaryPartText, true)
       }
       return
     }
@@ -1095,15 +1382,23 @@ function parseToolUserInputQuestions(params: Record<string, unknown>): ToolUserI
 
     if (method === 'item/completed' && isRecord(params) && isRecord(params.item)) {
       const item = params.item
+      const turnId = pickStringValue(params, ['turnId']) ?? undefined
       if (item.type === 'agentMessage') {
-        completeAssistantItem(item, typeof params.turnId === 'string' ? params.turnId : undefined)
+        completeAssistantItem(item, turnId)
+      }
+      if (item.type === 'reasoning') {
+        const itemId = typeof item.id === 'string' ? item.id : null
+        const resolvedTurnId = resolveReasoningTurnId(itemId, turnId)
+        const summaryText = extractReasoningSummaryTextFromItem(item)
+        if (resolvedTurnId && summaryText.length > 0) {
+          appendReasoningSummary(resolvedTurnId, summaryText, true)
+        }
       }
 
       const toolItemType = normalizeToolItemType(item.type)
       if (toolItemType) {
         const callId = pickStringValue(item, ['callId', 'call_id']) ?? pickStringValue(params, ['callId', 'call_id'])
         const itemId = pickStringValue(item, ['id', 'itemId', 'item_id']) ?? pickStringValue(params, ['itemId', 'item_id'])
-        const turnId = pickStringValue(params, ['turnId']) ?? undefined
         const toolName = resolveToolName(toolItemType, item)
         const status = resolveToolCompletionStatus(item)
         const output =
@@ -1324,6 +1619,7 @@ function parseToolUserInputQuestions(params: Record<string, unknown>): ToolUserI
 
         activeThreadId.value = nextThreadId
         resumeThreadId.value = nextThreadId
+        readPreviewThreadId.value = ''
         pushLog('rpc', 'info', `thread/start completed: ${nextThreadId}`, response)
         clearUserGuidance()
       } else {
@@ -1401,6 +1697,10 @@ function parseToolUserInputQuestions(params: Record<string, unknown>): ToolUserI
 
       const readThreadId = pickStringValue(thread, ['id', 'threadId', 'thread_id']) ?? resolvedThreadId
       selectedHistoryThreadId.value = readThreadId
+      readPreviewThreadId.value = readThreadId
+      currentTurnId.value = ''
+      turnStatus.value = 'idle'
+      hydrateMessagesFromThread(thread)
       pushLog('rpc', 'info', `thread/read completed (read-only): ${readThreadId}`, {
         turns: Array.isArray(thread.turns) ? thread.turns.length : 0,
       })

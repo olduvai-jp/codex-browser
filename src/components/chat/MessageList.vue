@@ -8,15 +8,17 @@ defineProps<{
 </script>
 
 <template>
-  <div class="messages flex flex-1 flex-col gap-3 overflow-y-auto px-4 py-6" role="log" aria-live="polite">
-    <p v-if="messages.length === 0" class="py-12 text-center text-sm text-text-tertiary">
-      まだメッセージはありません。
-    </p>
+  <div class="messages flex flex-1 items-start overflow-y-auto px-4 py-7 sm:px-6" role="log" aria-live="polite">
+    <div class="mx-auto flex w-full max-w-5xl flex-col gap-4">
+      <p v-if="messages.length === 0" class="rounded-2xl border border-dashed border-border-default bg-surface-secondary py-12 text-center text-sm text-text-tertiary">
+        まだメッセージはありません。
+      </p>
 
-    <MessageBubble
-      v-for="entry in messages"
-      :key="entry.id"
-      :message="entry"
-    />
+      <MessageBubble
+        v-for="entry in messages"
+        :key="entry.id"
+        :message="entry"
+      />
+    </div>
   </div>
 </template>

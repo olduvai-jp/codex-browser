@@ -1,9 +1,10 @@
-import type { ComponentPublicInstance } from 'vue'
+import { defineComponent, type ComponentPublicInstance } from 'vue'
 
 import { flushPromises, mount, type DOMWrapper, type VueWrapper } from '@vue/test-utils'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 
 import App from '../App.vue'
+import { useBridgeClient } from '../composables/useBridgeClient'
 
 const bridgeMock = vi.hoisted(() => {
   type RequestHandler = (method: string, params: unknown) => unknown | Promise<unknown>
@@ -101,6 +102,30 @@ function getClientInstance(): InstanceType<typeof bridgeMock.MockBridgeRpcClient
   return client
 }
 
+type BridgeClientState = ReturnType<typeof useBridgeClient>
+type BridgeClientHarnessVm = ComponentPublicInstance & {
+  bridge: BridgeClientState
+}
+
+function mountBridgeClientHarness(): {
+  wrapper: VueWrapper<BridgeClientHarnessVm>
+  bridge: BridgeClientState
+} {
+  const BridgeClientHarness = defineComponent({
+    setup() {
+      const bridge = useBridgeClient()
+      return { bridge }
+    },
+    template: '<div />',
+  })
+
+  const wrapper = mount(BridgeClientHarness) as unknown as VueWrapper<BridgeClientHarnessVm>
+  return {
+    wrapper,
+    bridge: wrapper.vm.bridge,
+  }
+}
+
 async function connectAndInitialize(wrapper: VueWrapper<ComponentPublicInstance>) {
   await getByTestId(wrapper, 'connect-button').trigger('click')
   await flushPromises()
@@ -169,6 +194,25 @@ describe('App.vue ui phase-1 flows', () => {
       wrapper.unmount()
       window.history.replaceState({}, '', originalPath)
     }
+  })
+
+  it('exposes accessible attributes on the sidebar toggle button', async () => {
+    const wrapper = mount(App)
+    const toggleButton = wrapper.get('button[aria-controls="thread-sidebar"]')
+
+    expect(toggleButton.attributes('type')).toBe('button')
+    expect(toggleButton.attributes('aria-expanded')).toBe('false')
+    expect(toggleButton.attributes('aria-label')).toBe('サイドバーを開く')
+    expect(toggleButton.attributes('title')).toBe('サイドバーを開く')
+    expect(wrapper.find('#thread-sidebar').exists()).toBe(true)
+
+    await toggleButton.trigger('click')
+
+    expect(toggleButton.attributes('aria-expanded')).toBe('true')
+    expect(toggleButton.attributes('aria-label')).toBe('サイドバーを閉じる')
+    expect(toggleButton.attributes('title')).toBe('サイドバーを閉じる')
+
+    wrapper.unmount()
   })
 
   it('quick start connects and restores the latest conversation path', async () => {
@@ -335,6 +379,256 @@ describe('App.vue ui phase-1 flows', () => {
     wrapper.unmount()
   })
 
+  it('shows reasoning summaryTextDelta in assistant bubble while streaming response', async () => {
+    bridgeMock.setRequestHandler(async (method) => {
+      if (method === 'initialize') {
+        return { userAgent: 'mock-codex-agent' }
+      }
+
+      if (method === 'thread/start') {
+        return { thread: { id: 'thread-reasoning-inline-1' } }
+      }
+
+      if (method === 'turn/start') {
+        return { turn: { id: 'turn-reasoning-inline-1' } }
+      }
+
+      throw new Error(`Unexpected method: ${method}`)
+    })
+
+    const wrapper = mount(App)
+    const client = await connectAndInitialize(wrapper)
+    await getByTestId(wrapper, 'start-thread-button').trigger('click')
+    await flushPromises()
+
+    await wrapper.get('textarea').setValue('Reasoning summary inline check')
+    await wrapper.get('form.composer').trigger('submit')
+    await flushPromises()
+
+    client.emitMessage({
+      method: 'item/started',
+      params: {
+        turnId: 'turn-reasoning-inline-1',
+        item: {
+          type: 'reasoning',
+          id: 'item-reasoning-inline-1',
+        },
+      },
+    })
+    client.emitMessage({
+      method: 'item/reasoning/summaryTextDelta',
+      params: {
+        turnId: 'turn-reasoning-inline-1',
+        itemId: 'item-reasoning-inline-1',
+        delta: 'Reasoning summary text',
+      },
+    })
+    client.emitMessage({
+      method: 'item/started',
+      params: {
+        turnId: 'turn-reasoning-inline-1',
+        item: {
+          type: 'agentMessage',
+          id: 'item-agent-inline-1',
+        },
+      },
+    })
+    client.emitMessage({
+      method: 'item/agentMessage/delta',
+      params: {
+        turnId: 'turn-reasoning-inline-1',
+        itemId: 'item-agent-inline-1',
+        delta: 'streamed answer',
+      },
+    })
+    await flushPromises()
+
+    const conversationTexts = wrapper.findAll('.message pre').map((entry) => entry.text())
+    expect(conversationTexts[conversationTexts.length - 1]).toBe('Reasoning summary text\n\nstreamed answer')
+
+    wrapper.unmount()
+  })
+
+  it('keeps reasoning summary after item/completed for agent message', async () => {
+    bridgeMock.setRequestHandler(async (method) => {
+      if (method === 'initialize') {
+        return { userAgent: 'mock-codex-agent' }
+      }
+
+      if (method === 'thread/start') {
+        return { thread: { id: 'thread-reasoning-inline-2' } }
+      }
+
+      if (method === 'turn/start') {
+        return { turn: { id: 'turn-reasoning-inline-2' } }
+      }
+
+      throw new Error(`Unexpected method: ${method}`)
+    })
+
+    const wrapper = mount(App)
+    const client = await connectAndInitialize(wrapper)
+    openAdvancedPanel(wrapper)
+    await getByTestId(wrapper, 'start-thread-button').trigger('click')
+    await flushPromises()
+
+    await wrapper.get('textarea').setValue('Reasoning summary completion check')
+    await wrapper.get('form.composer').trigger('submit')
+    await flushPromises()
+
+    client.emitMessage({
+      method: 'item/started',
+      params: {
+        turnId: 'turn-reasoning-inline-2',
+        item: {
+          type: 'reasoning',
+          id: 'item-reasoning-inline-2',
+        },
+      },
+    })
+    client.emitMessage({
+      method: 'item/reasoning/summaryTextDelta',
+      params: {
+        turnId: 'turn-reasoning-inline-2',
+        itemId: 'item-reasoning-inline-2',
+        delta: 'Reasoning summary',
+      },
+    })
+    client.emitMessage({
+      method: 'item/reasoning/summaryPartAdded',
+      params: {
+        turnId: 'turn-reasoning-inline-2',
+        itemId: 'item-reasoning-inline-2',
+        part: {
+          type: 'summary_text',
+          text: ' persisted',
+        },
+      },
+    })
+    client.emitMessage({
+      method: 'item/started',
+      params: {
+        turnId: 'turn-reasoning-inline-2',
+        item: {
+          type: 'agentMessage',
+          id: 'item-agent-inline-2',
+        },
+      },
+    })
+    client.emitMessage({
+      method: 'item/agentMessage/delta',
+      params: {
+        turnId: 'turn-reasoning-inline-2',
+        itemId: 'item-agent-inline-2',
+        delta: 'draft answer',
+      },
+    })
+    client.emitMessage({
+      method: 'item/completed',
+      params: {
+        turnId: 'turn-reasoning-inline-2',
+        item: {
+          type: 'agentMessage',
+          id: 'item-agent-inline-2',
+          text: 'final answer',
+        },
+      },
+    })
+    await flushPromises()
+
+    const conversationTexts = wrapper.findAll('.message pre').map((entry) => entry.text())
+    expect(conversationTexts[conversationTexts.length - 1]).toBe('Reasoning summary persisted\n\nfinal answer')
+    expect(wrapper.text()).not.toContain('Unhandled notification: item/reasoning/summaryTextDelta')
+    expect(wrapper.text()).not.toContain('Unhandled notification: item/reasoning/summaryPartAdded')
+
+    wrapper.unmount()
+  })
+
+  it('applies reasoning summary when reasoning completion arrives after agentMessage completion', async () => {
+    bridgeMock.setRequestHandler(async (method) => {
+      if (method === 'initialize') {
+        return { userAgent: 'mock-codex-agent' }
+      }
+
+      if (method === 'thread/start') {
+        return { thread: { id: 'thread-reasoning-inline-late-1' } }
+      }
+
+      if (method === 'turn/start') {
+        return { turn: { id: 'turn-reasoning-inline-late-1' } }
+      }
+
+      throw new Error(`Unexpected method: ${method}`)
+    })
+
+    const wrapper = mount(App)
+    const client = await connectAndInitialize(wrapper)
+    await getByTestId(wrapper, 'start-thread-button').trigger('click')
+    await flushPromises()
+
+    await wrapper.get('textarea').setValue('Late reasoning completion check')
+    await wrapper.get('form.composer').trigger('submit')
+    await flushPromises()
+
+    client.emitMessage({
+      method: 'item/started',
+      params: {
+        turnId: 'turn-reasoning-inline-late-1',
+        item: {
+          type: 'reasoning',
+          id: 'item-reasoning-inline-late-1',
+        },
+      },
+    })
+    client.emitMessage({
+      method: 'item/started',
+      params: {
+        turnId: 'turn-reasoning-inline-late-1',
+        item: {
+          type: 'agentMessage',
+          id: 'item-agent-inline-late-1',
+        },
+      },
+    })
+    client.emitMessage({
+      method: 'item/completed',
+      params: {
+        turnId: 'turn-reasoning-inline-late-1',
+        item: {
+          type: 'agentMessage',
+          id: 'item-agent-inline-late-1',
+          text: 'final answer first',
+        },
+      },
+    })
+    await flushPromises()
+
+    let conversationTexts = wrapper.findAll('.message pre').map((entry) => entry.text())
+    expect(conversationTexts[conversationTexts.length - 1]).toBe('final answer first')
+
+    client.emitMessage({
+      method: 'item/completed',
+      params: {
+        item: {
+          type: 'reasoning',
+          id: 'item-reasoning-inline-late-1',
+          summary: [
+            {
+              type: 'summary_text',
+              text: 'Late reasoning summary',
+            },
+          ],
+        },
+      },
+    })
+    await flushPromises()
+
+    conversationTexts = wrapper.findAll('.message pre').map((entry) => entry.text())
+    expect(conversationTexts[conversationTexts.length - 1]).toBe('Late reasoning summary\n\nfinal answer first')
+
+    wrapper.unmount()
+  })
+
   it('shows approval modal and responds to accept decision', async () => {
     bridgeMock.setRequestHandler(async (method) => {
       if (method === 'initialize') {
@@ -419,6 +713,16 @@ describe('App.vue ui phase-1 flows', () => {
                     id: 'item-agent-resume-1',
                     text: 'Hydrated assistant reply',
                   },
+                  {
+                    type: 'reasoning',
+                    id: 'item-reasoning-resume-1',
+                    summary: [
+                      {
+                        type: 'summary_text',
+                        text: 'Hydrated reasoning summary',
+                      },
+                    ],
+                  },
                 ],
               },
             ],
@@ -445,7 +749,10 @@ describe('App.vue ui phase-1 flows', () => {
     expect(wrapper.text()).toContain('応答状態: idle')
 
     const conversationTexts = wrapper.findAll('.message pre').map((entry) => entry.text())
-    expect(conversationTexts).toEqual(['Hydrated user message', 'Hydrated assistant reply'])
+    expect(conversationTexts).toEqual([
+      'Hydrated user message',
+      'Hydrated reasoning summary\n\nHydrated assistant reply',
+    ])
 
     wrapper.unmount()
   })
@@ -561,6 +868,91 @@ describe('App.vue ui phase-1 flows', () => {
       ],
     })
     expect(wrapper.text()).toContain('ターン ID: turn-history-send-1')
+
+    wrapper.unmount()
+  })
+
+  it('keeps thread/read read-only preview non-activating and blocks send against a different active thread', async () => {
+    bridgeMock.setRequestHandler(async (method) => {
+      if (method === 'initialize') {
+        return { userAgent: 'mock-codex-agent' }
+      }
+
+      if (method === 'thread/start') {
+        return { thread: { id: 'thread-active-readonly-1' } }
+      }
+
+      if (method === 'thread/read') {
+        return {
+          thread: {
+            id: 'thread-readonly-preview-1',
+            turns: [
+              {
+                id: 'turn-readonly-preview-1',
+                items: [
+                  {
+                    type: 'userMessage',
+                    content: [
+                      {
+                        type: 'text',
+                        text: 'Read-only user message',
+                      },
+                    ],
+                  },
+                  {
+                    type: 'agentMessage',
+                    id: 'item-readonly-preview-1',
+                    text: 'Read-only assistant reply',
+                  },
+                ],
+              },
+            ],
+          },
+        }
+      }
+
+      if (method === 'turn/start') {
+        return { turn: { id: 'turn-should-not-start' } }
+      }
+
+      throw new Error(`Unexpected method: ${method}`)
+    })
+
+    const { wrapper, bridge } = mountBridgeClientHarness()
+    await bridge.connect()
+    await flushPromises()
+    await bridge.startThread()
+    await flushPromises()
+
+    expect(bridge.activeThreadId.value).toBe('thread-active-readonly-1')
+
+    bridge.messageInput.value = 'should stay blocked in read-only preview'
+    expect(bridge.canSendMessage.value).toBe(true)
+
+    await bridge.readThread('thread-readonly-preview-1')
+    await flushPromises()
+
+    expect(bridge.activeThreadId.value).toBe('thread-active-readonly-1')
+    expect(bridge.selectedHistoryThreadId.value).toBe('thread-readonly-preview-1')
+    expect(bridge.messages.value.map((entry) => entry.text)).toEqual([
+      'Read-only user message',
+      'Read-only assistant reply',
+    ])
+    expect(bridge.canSendMessage.value).toBe(false)
+    expect(bridge.sendStateHint.value).toContain('履歴プレビュー中のため送信できません')
+
+    const turnStartCallCountBeforeSend = bridgeMock
+      .getRequestCalls()
+      .filter((call) => call.method === 'turn/start').length
+    expect(turnStartCallCountBeforeSend).toBe(0)
+
+    await bridge.sendTurn()
+    await flushPromises()
+
+    const turnStartCallCountAfterSend = bridgeMock
+      .getRequestCalls()
+      .filter((call) => call.method === 'turn/start').length
+    expect(turnStartCallCountAfterSend).toBe(0)
 
     wrapper.unmount()
   })

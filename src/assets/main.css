@@ -7,43 +7,51 @@
   --font-mono: ui-monospace, Menlo, Monaco, Consolas, 'Liberation Mono',
     'Courier New', monospace;
 
-  --color-surface: #ffffff;
-  --color-surface-secondary: #f9fafb;
-  --color-surface-tertiary: #f3f4f6;
-  --color-border-default: #e5e7eb;
-  --color-border-strong: #d1d5db;
-  --color-text-primary: #111827;
-  --color-text-secondary: #6b7280;
-  --color-text-tertiary: #9ca3af;
+  --color-surface: #f8fafc;
+  --color-surface-secondary: #f1f5f9;
+  --color-surface-tertiary: #e2e8f0;
+  --color-border-default: #cbd5e1;
+  --color-border-strong: #94a3b8;
+  --color-text-primary: #0f172a;
+  --color-text-secondary: #334155;
+  --color-text-tertiary: #64748b;
+  --color-text-muted: #94a3b8;
   --color-accent: #2563eb;
   --color-accent-hover: #1d4ed8;
+  --color-accent-soft: #dbeafe;
   --color-success: #059669;
   --color-warning: #d97706;
   --color-danger: #dc2626;
-  --color-user-bubble: #eff6ff;
+  --color-danger-soft: #fee2e2;
+  --color-focus-ring: #60a5fa;
+  --color-user-bubble: #dbeafe;
   --color-user-border: #bfdbfe;
   --color-assistant-bubble: #ffffff;
-  --color-system-bubble: #f9fafb;
+  --color-system-bubble: #f1f5f9;
 }
 
 @variant dark {
   @theme {
-    --color-surface: #0f172a;
-    --color-surface-secondary: #1e293b;
-    --color-surface-tertiary: #334155;
-    --color-border-default: #334155;
-    --color-border-strong: #475569;
-    --color-text-primary: #f1f5f9;
-    --color-text-secondary: #94a3b8;
-    --color-text-tertiary: #64748b;
-    --color-accent: #3b82f6;
-    --color-accent-hover: #2563eb;
-    --color-success: #10b981;
-    --color-warning: #f59e0b;
-    --color-danger: #ef4444;
-    --color-user-bubble: #1e3a5f;
-    --color-user-border: #1e40af;
-    --color-assistant-bubble: #1e293b;
-    --color-system-bubble: #1e293b;
+    --color-surface: #0b1220;
+    --color-surface-secondary: #111b30;
+    --color-surface-tertiary: #1d2a44;
+    --color-border-default: #31415e;
+    --color-border-strong: #4e658e;
+    --color-text-primary: #e8eefc;
+    --color-text-secondary: #bfcae5;
+    --color-text-tertiary: #8ea0c2;
+    --color-text-muted: #6f85ad;
+    --color-accent: #60a5fa;
+    --color-accent-hover: #3b82f6;
+    --color-accent-soft: #183b6e;
+    --color-success: #34d399;
+    --color-warning: #fbbf24;
+    --color-danger: #f87171;
+    --color-danger-soft: #4a1e28;
+    --color-focus-ring: #93c5fd;
+    --color-user-bubble: #1d3e6f;
+    --color-user-border: #3b82f6;
+    --color-assistant-bubble: #111b30;
+    --color-system-bubble: #13213a;
   }
 }

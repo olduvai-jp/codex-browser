@@ -14,23 +14,29 @@ const roleLabel: Record<string, string> = {
 
 <template>
   <article
-    class="message group"
+    class="message group relative w-full shrink-0 overflow-hidden border shadow-sm"
     :class="[
       `role-${message.role}`,
-      { streaming: message.streaming },
+      { streaming: message.streaming, 'ring-1 ring-accent/25': message.streaming },
       message.role === 'user'
-        ? 'ml-12 rounded-2xl rounded-br-md border border-user-border bg-user-bubble'
+        ? 'ml-auto max-w-[min(46rem,calc(100%-2rem))] rounded-2xl rounded-br-md border-user-border bg-user-bubble'
         : message.role === 'assistant'
-          ? 'mr-12 rounded-2xl rounded-bl-md border border-border-default bg-assistant-bubble'
-          : 'mx-4 rounded-xl border border-border-default bg-system-bubble',
+          ? 'mr-auto max-w-[min(52rem,calc(100%-1rem))] rounded-2xl rounded-bl-md border-border-default bg-assistant-bubble'
+          : 'mx-auto max-w-[min(52rem,calc(100%-0.5rem))] rounded-xl border-border-default bg-system-bubble',
     ]"
   >
-    <div class="flex items-baseline justify-between gap-3 px-4 pt-3">
-      <span class="text-xs font-semibold" :class="message.role === 'user' ? 'text-accent' : 'text-text-secondary'">
-        {{ roleLabel[message.role] ?? message.role }}
-      </span>
-      <small v-if="message.turnId" class="truncate text-xs text-text-tertiary">{{ message.turnId }}</small>
+    <div class="flex items-start justify-between gap-3 px-4 pt-3">
+      <div class="flex min-w-0 items-center gap-2">
+        <span
+          class="inline-flex items-center rounded-full px-2 py-0.5 text-[11px] font-semibold tracking-wide"
+          :class="message.role === 'user' ? 'bg-accent/10 text-accent' : message.role === 'assistant' ? 'bg-surface-tertiary text-text-secondary' : 'bg-surface text-text-tertiary'"
+        >
+          {{ roleLabel[message.role] ?? message.role }}
+        </span>
+        <span v-if="message.streaming" class="text-[11px] font-medium text-accent">生成中...</span>
+      </div>
+      <small v-if="message.turnId" class="truncate text-[11px] text-text-muted">{{ message.turnId }}</small>
     </div>
-    <pre class="whitespace-pre-wrap break-words px-4 pb-3 pt-1 font-sans text-sm leading-relaxed text-text-primary">{{ message.text || (message.streaming ? '...' : '') }}</pre>
+    <pre class="whitespace-pre-wrap break-words px-4 pb-4 pt-1.5 font-sans text-[15px] leading-7 text-text-primary">{{ message.text || (message.streaming ? '...' : '') }}</pre>
   </article>
 </template>

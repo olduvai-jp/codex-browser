@@ -89,11 +89,12 @@ onMounted(() => {
     />
 
     <!-- Main Area -->
-    <div class="flex min-h-0 flex-1">
+    <div class="flex min-h-0 flex-1 bg-surface">
       <!-- Sidebar -->
       <div
-        class="w-64 shrink-0 transition-all duration-200"
-        :class="sidebarOpen ? 'max-md:fixed max-md:inset-y-14 max-md:left-0 max-md:z-40' : 'max-md:hidden'"
+        id="thread-sidebar"
+        class="w-72 shrink-0 border-r border-border-default bg-surface-secondary/70 transition-all duration-200"
+        :class="sidebarOpen ? 'max-md:fixed max-md:inset-y-16 max-md:left-0 max-md:z-40 max-md:shadow-lg' : 'max-md:hidden'"
       >
         <ThreadSidebar
           :threads="threadHistory"
@@ -115,7 +116,7 @@ onMounted(() => {
       />
 
       <!-- Chat Area -->
-      <div class="flex min-w-0 flex-1 flex-col">
+      <div class="flex min-w-0 flex-1 flex-col bg-surface">
         <MessageList :messages="messages" />
         <ChatComposer
           :model-value="messageInput"

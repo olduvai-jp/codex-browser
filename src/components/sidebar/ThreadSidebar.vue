@@ -18,6 +18,8 @@ const emit = defineEmits<{
   refresh: []
   'open-thread': [threadId: string]
   'new-thread': []
+  'new-thread-in-workspace': [cwd: string]
+  'open-workspace-picker': []
   'toggle-advanced-panel': []
 }>()
 
@@ -115,6 +117,14 @@ watch(
     </button>
 
     <button
+      class="mx-3 mt-2 rounded-xl border border-border-default bg-surface px-3 py-2 text-xs font-medium text-text-secondary transition-colors hover:border-accent hover:text-accent focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus-ring/40"
+      data-testid="workspace-picker-open-button"
+      @click="emit('open-workspace-picker')"
+    >
+      ワークスペースを選んで新規会話
+    </button>
+
+    <button
       class="mx-3 mt-2 rounded-xl border border-border-default bg-surface px-3 py-2 text-xs font-medium text-text-secondary transition-colors hover:border-accent hover:text-accent focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus-ring/40 disabled:cursor-not-allowed disabled:border-border-default disabled:text-text-muted disabled:opacity-80"
       data-testid="history-open-selected-button"
       :disabled="!selectedThreadId || isTurnActive"
@@ -137,37 +147,51 @@ watch(
         data-testid="workspace-group"
         :data-workspace-key="group.workspaceKey"
       >
-        <button
-          class="flex w-full items-center justify-between gap-2 rounded-xl px-3 py-2.5 text-left transition-colors hover:bg-surface"
-          data-testid="workspace-group-toggle"
-          :data-workspace-key="group.workspaceKey"
-          type="button"
-          @click="toggleWorkspace(group.workspaceKey)"
-        >
-          <div class="min-w-0">
-            <p class="truncate text-xs font-semibold tracking-wide text-text-secondary">
-              {{ group.workspaceLabel }}
-            </p>
-            <p class="mt-0.5 text-[11px] text-text-tertiary">
-              {{ group.threadCount }} 件
-              <span class="mx-1">•</span>
-              最終更新: {{ formatHistoryUpdatedAt(group.latestUpdatedAt) }}
-            </p>
-          </div>
-          <svg
-            xmlns="http://www.w3.org/2000/svg"
-            class="h-4 w-4 shrink-0 text-text-tertiary transition-transform"
-            :class="isWorkspaceExpanded(group.workspaceKey) ? 'rotate-90' : ''"
-            viewBox="0 0 20 20"
-            fill="currentColor"
+        <div class="flex items-center">
+          <button
+            class="flex flex-1 items-center justify-between gap-2 rounded-l-xl px-3 py-2.5 text-left transition-colors hover:bg-surface"
+            data-testid="workspace-group-toggle"
+            :data-workspace-key="group.workspaceKey"
+            type="button"
+            @click="toggleWorkspace(group.workspaceKey)"
           >
-            <path
-              fill-rule="evenodd"
-              d="M7.293 14.707a1 1 0 010-1.414L10.586 10 7.293 6.707a1 1 0 111.414-1.414l4 4a1 1 0 010 1.414l-4 4a1 1 0 01-1.414 0z"
-              clip-rule="evenodd"
-            />
-          </svg>
-        </button>
+            <div class="min-w-0">
+              <p class="truncate text-xs font-semibold tracking-wide text-text-secondary">
+                {{ group.workspaceLabel }}
+              </p>
+              <p class="mt-0.5 text-[11px] text-text-tertiary">
+                {{ group.threadCount }} 件
+                <span class="mx-1">&bull;</span>
+                最終更新: {{ formatHistoryUpdatedAt(group.latestUpdatedAt) }}
+              </p>
+            </div>
+            <svg
+              xmlns="http://www.w3.org/2000/svg"
+              class="h-4 w-4 shrink-0 text-text-tertiary transition-transform"
+              :class="isWorkspaceExpanded(group.workspaceKey) ? 'rotate-90' : ''"
+              viewBox="0 0 20 20"
+              fill="currentColor"
+            >
+              <path
+                fill-rule="evenodd"
+                d="M7.293 14.707a1 1 0 010-1.414L10.586 10 7.293 6.707a1 1 0 111.414-1.414l4 4a1 1 0 010 1.414l-4 4a1 1 0 01-1.414 0z"
+                clip-rule="evenodd"
+              />
+            </svg>
+          </button>
+          <button
+            class="shrink-0 rounded-r-xl px-2 py-2.5 text-text-tertiary transition-colors hover:bg-surface hover:text-accent"
+            data-testid="workspace-group-new-thread"
+            :data-workspace-key="group.workspaceKey"
+            :title="`${group.workspaceLabel} で新しい会話`"
+            type="button"
+            @click="emit('new-thread-in-workspace', group.workspaceKey)"
+          >
+            <svg xmlns="http://www.w3.org/2000/svg" class="h-4 w-4" viewBox="0 0 20 20" fill="currentColor">
+              <path fill-rule="evenodd" d="M10 3a1 1 0 011 1v5h5a1 1 0 110 2h-5v5a1 1 0 11-2 0v-5H4a1 1 0 110-2h5V4a1 1 0 011-1z" clip-rule="evenodd" />
+            </svg>
+          </button>
+        </div>
 
         <div
           v-if="isWorkspaceExpanded(group.workspaceKey)"

@@ -20,6 +20,9 @@ export default defineConfig({
         target: `ws://127.0.0.1:${bridgePort}`,
         ws: true,
       },
+      '/api': {
+        target: `http://127.0.0.1:${bridgePort}`,
+      },
     },
   },
   resolve: {

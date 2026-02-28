@@ -181,3 +181,14 @@ export type ApprovalMethodExplanation = {
   intent: string
   impact: string
 }
+
+export type DirectoryEntry = {
+  name: string
+  path: string
+}
+
+export type DirectoryListResult = {
+  path: string
+  parent: string | null
+  directories: DirectoryEntry[]
+}

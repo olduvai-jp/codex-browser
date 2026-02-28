@@ -8,6 +8,7 @@ import ChatComposer from './components/chat/ChatComposer.vue'
 import AdvancedPanel from './components/advanced/AdvancedPanel.vue'
 import ApprovalModal from './components/approval/ApprovalModal.vue'
 import ToolUserInputModal from './components/tool/ToolUserInputModal.vue'
+import WorkspacePicker from './components/workspace/WorkspacePicker.vue'
 
 const {
   resolvedWsUrl,
@@ -55,6 +56,7 @@ const {
   disconnect,
   quickStartConversation,
   startThread,
+  listDirectories,
   loadThreadHistory,
   resumeThread,
   sendTurn,
@@ -65,10 +67,17 @@ const {
   respondToToolUserInput,
   cancelToolUserInputRequest,
   respondToApproval,
+  bridgeCwd,
 } = useBridgeClient()
 
 const sidebarOpen = ref(false)
 const advancedPanelOpen = ref(false)
+const workspacePickerOpen = ref(false)
+
+function handleWorkspaceSelect(cwd: string): void {
+  startThread(cwd)
+  workspacePickerOpen.value = false
+}
 
 onMounted(() => {
   quickStartConversation()
@@ -105,7 +114,9 @@ onMounted(() => {
           :advanced-panel-open="advancedPanelOpen"
           @refresh="loadThreadHistory"
           @open-thread="resumeThread($event)"
-          @new-thread="startThread"
+          @new-thread="startThread()"
+          @new-thread-in-workspace="startThread($event)"
+          @open-workspace-picker="workspacePickerOpen = true"
           @toggle-advanced-panel="advancedPanelOpen = !advancedPanelOpen"
         />
       </div>
@@ -172,7 +183,7 @@ onMounted(() => {
       :turn-start-with-model-count="turnStartWithModelCount"
       :turn-start-count="turnStartCount"
       :model-selection-rate-label="modelSelectionRateLabel"
-      @start-thread="startThread"
+      @start-thread="startThread()"
       @update:resume-thread-id="resumeThreadId = $event"
       @resume-thread="resumeThread"
       @load-config="loadConfig"
@@ -195,6 +206,15 @@ onMounted(() => {
       :queue-size="toolUserInputRequests.length"
       @submit="respondToToolUserInput"
       @cancel="cancelToolUserInputRequest"
+    />
+
+    <!-- Workspace Picker Modal -->
+    <WorkspacePicker
+      v-if="workspacePickerOpen"
+      :initial-path="bridgeCwd || '/'"
+      :list-directories="listDirectories"
+      @select="handleWorkspaceSelect"
+      @cancel="workspacePickerOpen = false"
     />
   </div>
 </template>

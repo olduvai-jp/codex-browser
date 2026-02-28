@@ -20,6 +20,7 @@ import {
   parseJsonRpcResponse,
   type InitializeClientResponse,
 } from './initialize-request-cache'
+import { listDirectoryChildren } from './directory-listing'
 
 const BRIDGE_HOST = process.env.BRIDGE_HOST ?? '127.0.0.1'
 const BRIDGE_PORT = Number.parseInt(process.env.BRIDGE_PORT ?? '8787', 10)
@@ -34,6 +35,23 @@ const httpServer = createServer((req, res) => {
   if (req.url === '/health') {
     res.writeHead(200, { 'content-type': 'application/json' })
     res.end(JSON.stringify({ ok: true }))
+    return
+  }
+
+  if (req.method === 'GET' && req.url?.startsWith('/api/directories')) {
+    const url = new URL(req.url, `http://${BRIDGE_HOST}:${BRIDGE_PORT}`)
+    const requestedPath = url.searchParams.get('path') ?? BRIDGE_CWD
+
+    listDirectoryChildren(requestedPath)
+      .then((result) => {
+        res.writeHead(200, { 'content-type': 'application/json' })
+        res.end(JSON.stringify(result))
+      })
+      .catch((error) => {
+        const message = error instanceof Error ? error.message : String(error)
+        res.writeHead(400, { 'content-type': 'application/json' })
+        res.end(JSON.stringify({ error: message }))
+      })
     return
   }
 

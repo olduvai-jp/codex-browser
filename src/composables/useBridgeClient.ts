@@ -40,6 +40,7 @@ import type {
   UiMessage,
   UserGuidance,
   UserGuidanceTone,
+  DirectoryListResult,
 } from '@/types'
 
 const DEFAULT_WS_URL = 'ws://127.0.0.1:8787/bridge'
@@ -2039,15 +2040,21 @@ function parseToolUserInputQuestions(params: Record<string, unknown>): ToolUserI
     }
   }
 
-  async function startThread(): Promise<void> {
+  async function startThread(cwd?: string): Promise<void> {
     if (!client.value || !canStartThread.value) {
       return
     }
 
     try {
-      const response = await client.value.request('thread/start', {
+      const params: Record<string, unknown> = {
         experimentalRawEvents: false,
-      })
+      }
+      const resolvedCwd = cwd?.trim()
+      if (resolvedCwd && resolvedCwd.length > 0) {
+        params.cwd = resolvedCwd
+      }
+
+      const response = await client.value.request('thread/start', params)
 
       if (isRecord(response) && isRecord(response.thread) && typeof response.thread.id === 'string') {
         const nextThreadId = response.thread.id
@@ -2071,6 +2078,34 @@ function parseToolUserInputQuestions(params: Record<string, unknown>): ToolUserI
         'error',
         `新しい会話の作成に失敗しました。接続を確認してから再実行してください。詳細: ${message}`,
       )
+    }
+  }
+
+  async function listDirectories(path?: string): Promise<DirectoryListResult | null> {
+    try {
+      const url = new URL('/api/directories', window.location.origin)
+      if (path) {
+        url.searchParams.set('path', path)
+      }
+
+      const response = await fetch(url.toString())
+      if (!response.ok) {
+        const body = await response.json().catch(() => ({}))
+        pushLog('rpc', 'warn', `Directory listing failed: ${(body as Record<string, unknown>).error ?? response.statusText}`)
+        return null
+      }
+
+      const data = (await response.json()) as unknown
+      if (isRecord(data) && typeof data.path === 'string' && Array.isArray(data.directories)) {
+        return data as unknown as DirectoryListResult
+      }
+
+      pushLog('rpc', 'warn', 'Directory listing returned unexpected shape', data as Record<string, unknown>)
+      return null
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error)
+      pushLog('rpc', 'error', `Directory listing error: ${message}`)
+      return null
     }
   }
 
@@ -2531,6 +2566,7 @@ function parseToolUserInputQuestions(params: Record<string, unknown>): ToolUserI
     approvalDecisionTotalMs,
     turnStartCount,
     turnStartWithModelCount,
+    bridgeCwd,
 
     // Computed
     isConnected,
@@ -2556,6 +2592,7 @@ function parseToolUserInputQuestions(params: Record<string, unknown>): ToolUserI
     disconnect,
     quickStartConversation,
     startThread,
+    listDirectories,
     loadThreadHistory,
     readThread,
     resumeThread,

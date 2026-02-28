@@ -25,6 +25,7 @@ import type {
   ModelOption,
   ReasoningEffort,
   ThreadHistoryEntry,
+  WorkspaceHistoryGroup,
   TimelineApprovalItem,
   TimelineItem,
   TimelineToolUserInputItem,
@@ -42,10 +43,13 @@ import type {
 } from '@/types'
 
 const DEFAULT_WS_URL = 'ws://127.0.0.1:8787/bridge'
-const MAX_THREAD_HISTORY_ENTRIES = 50
+const MAX_THREADS_PER_WORKSPACE_GROUP = 50
 const MAX_TOOL_CALL_ENTRIES = 100
 const MAX_TOOL_CALL_EVENTS = 40
 const REASONING_EFFORT_SET = new Set<string>(REASONING_EFFORT_VALUES)
+const UNKNOWN_WORKSPACE_LABEL = '(unknown workspace)'
+const UUID_STRING_PATTERN = /^(?:[0-9a-f]{32}|[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})$/i
+const MAX_TITLE_CANDIDATE_LENGTH = 120
 
 type ToolItemType = 'commandExecution' | 'fileChange' | 'mcpToolCall'
 type ToolUserInputAnswers = Record<string, { answers: string[] }>
@@ -149,22 +153,149 @@ function isThreadNotFoundError(message: string): boolean {
   return /\bthread not found\b/i.test(message)
 }
 
-function selectThreadHistoryForDisplay(
+function isUuidString(value: string): boolean {
+  return UUID_STRING_PATTERN.test(value.trim())
+}
+
+function normalizeTitleCandidate(value: string): string | null {
+  const normalizedValue = value.replace(/\s+/g, ' ').trim()
+  if (normalizedValue.length === 0 || isUuidString(normalizedValue)) {
+    return null
+  }
+  if (normalizedValue.length <= MAX_TITLE_CANDIDATE_LENGTH) {
+    return normalizedValue
+  }
+
+  return `${normalizedValue.slice(0, MAX_TITLE_CANDIDATE_LENGTH - 3)}...`
+}
+
+function hasResolvedThreadTitle(entry: ThreadHistoryEntry): boolean {
+  const normalizedTitle = entry.title.trim()
+  return normalizedTitle.length > 0 && normalizedTitle !== entry.id && !isUuidString(normalizedTitle)
+}
+
+function applyThreadHistoryTitleOverrides(
+  entries: ThreadHistoryEntry[],
+  titleOverridesByThreadId: Record<string, string>,
+): ThreadHistoryEntry[] {
+  return entries.map((entry) => {
+    if (hasResolvedThreadTitle(entry)) {
+      return entry
+    }
+
+    const titleOverride = titleOverridesByThreadId[entry.id]
+    if (!titleOverride) {
+      return entry
+    }
+
+    const normalizedOverride = normalizeTitleCandidate(titleOverride)
+    if (!normalizedOverride) {
+      return entry
+    }
+
+    return {
+      ...entry,
+      title: normalizedOverride,
+    }
+  })
+}
+
+function resolveWorkspaceKeyForThread(entry: ThreadHistoryEntry): string {
+  const normalizedCwd = entry.cwd?.trim() ?? ''
+  return normalizedCwd.length > 0 ? normalizedCwd : UNKNOWN_WORKSPACE_LABEL
+}
+
+function groupThreadHistoryByWorkspace(
   entries: ThreadHistoryEntry[],
   bridgeCwd: string,
-): ThreadHistoryEntry[] {
+): WorkspaceHistoryGroup[] {
   const normalizedBridgeCwd = bridgeCwd.trim()
-  const sortedEntries = sortThreadHistoryByUpdatedAt(entries)
-  if (normalizedBridgeCwd.length === 0) {
-    return sortedEntries.slice(0, MAX_THREAD_HISTORY_ENTRIES)
+  const grouped = new Map<
+    string,
+    {
+      workspaceKey: string
+      workspaceLabel: string
+      threads: ThreadHistoryEntry[]
+      threadCount: number
+      latestUpdatedAt?: string
+      latestUpdatedAtMs: number | null
+      isCurrentWorkspace: boolean
+    }
+  >()
+
+  for (const entry of entries) {
+    const workspaceKey = resolveWorkspaceKeyForThread(entry)
+    const existingGroup = grouped.get(workspaceKey)
+    const updatedAtMs = parseUpdatedAtMs(entry.updatedAt)
+    if (existingGroup) {
+      existingGroup.threadCount += 1
+      if (existingGroup.threads.length < MAX_THREADS_PER_WORKSPACE_GROUP) {
+        existingGroup.threads.push(entry)
+      }
+      if (
+        updatedAtMs != null &&
+        (existingGroup.latestUpdatedAtMs == null || updatedAtMs > existingGroup.latestUpdatedAtMs)
+      ) {
+        existingGroup.latestUpdatedAtMs = updatedAtMs
+        existingGroup.latestUpdatedAt = entry.updatedAt
+      }
+      continue
+    }
+
+    grouped.set(workspaceKey, {
+      workspaceKey,
+      workspaceLabel: workspaceKey,
+      threads: [entry],
+      threadCount: 1,
+      latestUpdatedAt: entry.updatedAt,
+      latestUpdatedAtMs: updatedAtMs,
+      isCurrentWorkspace: normalizedBridgeCwd.length > 0 && workspaceKey === normalizedBridgeCwd,
+    })
   }
 
-  const cwdMatchedEntries = sortedEntries.filter((entry) => entry.cwd === normalizedBridgeCwd)
-  if (cwdMatchedEntries.length > 0) {
-    return cwdMatchedEntries.slice(0, MAX_THREAD_HISTORY_ENTRIES)
+  if (normalizedBridgeCwd.length > 0 && !grouped.has(normalizedBridgeCwd)) {
+    grouped.set(normalizedBridgeCwd, {
+      workspaceKey: normalizedBridgeCwd,
+      workspaceLabel: normalizedBridgeCwd,
+      threads: [],
+      threadCount: 0,
+      latestUpdatedAt: undefined,
+      latestUpdatedAtMs: null,
+      isCurrentWorkspace: true,
+    })
   }
 
-  return sortedEntries.slice(0, MAX_THREAD_HISTORY_ENTRIES)
+  return [...grouped.values()]
+    .map((group) => ({
+      workspaceKey: group.workspaceKey,
+      workspaceLabel: group.workspaceLabel,
+      threads: group.threads,
+      threadCount: group.threadCount,
+      latestUpdatedAt: group.latestUpdatedAt,
+      isCurrentWorkspace: group.isCurrentWorkspace,
+    }))
+    .sort((left, right) => {
+      if (left.isCurrentWorkspace !== right.isCurrentWorkspace) {
+        return left.isCurrentWorkspace ? -1 : 1
+      }
+
+      const leftUpdatedAtMs = parseUpdatedAtMs(left.latestUpdatedAt)
+      const rightUpdatedAtMs = parseUpdatedAtMs(right.latestUpdatedAt)
+      if (leftUpdatedAtMs == null && rightUpdatedAtMs == null) {
+        return left.workspaceLabel.localeCompare(right.workspaceLabel)
+      }
+      if (leftUpdatedAtMs == null) {
+        return 1
+      }
+      if (rightUpdatedAtMs == null) {
+        return -1
+      }
+      if (leftUpdatedAtMs === rightUpdatedAtMs) {
+        return left.workspaceLabel.localeCompare(right.workspaceLabel)
+      }
+
+      return rightUpdatedAtMs - leftUpdatedAtMs
+    })
 }
 
 export function useBridgeClient() {
@@ -187,6 +318,7 @@ export function useBridgeClient() {
   const quickStartInProgress = ref(false)
   const userGuidance = ref<UserGuidance | null>(null)
   const bridgeCwd = ref('')
+  const historyTitleOverridesByThreadId = ref<Record<string, string>>({})
 
   const messages = ref<UiMessage[]>([])
   const logs = ref<LogEntry[]>([])
@@ -321,6 +453,9 @@ export function useBridgeClient() {
   const canQuickStartConversation = computed(
     () => connectionState.value !== 'connecting' && !quickStartInProgress.value && !isTurnActive.value,
   )
+  const workspaceHistoryGroups = computed<WorkspaceHistoryGroup[]>(() =>
+    groupThreadHistoryByWorkspace(threadHistory.value, bridgeCwd.value),
+  )
   const timelineItems = computed<TimelineItem[]>(() => {
     const items: TimelineItem[] = []
 
@@ -444,6 +579,49 @@ export function useBridgeClient() {
 
   function clearUserGuidance(): void {
     userGuidance.value = null
+  }
+
+  function resolveTitleCandidateFromUserMessage(text: string): string | null {
+    return normalizeTitleCandidate(text)
+  }
+
+  function replaceThreadHistoryTitleIfNeeded(threadId: string, title: string): void {
+    const nextHistory = threadHistory.value.map((entry) => {
+      if (entry.id !== threadId || hasResolvedThreadTitle(entry)) {
+        return entry
+      }
+      return {
+        ...entry,
+        title,
+      }
+    })
+    threadHistory.value = nextHistory
+  }
+
+  function cacheThreadTitleOverride(threadId: string, rawTitle: string | null | undefined): void {
+    if (typeof rawTitle !== 'string') {
+      return
+    }
+
+    const normalizedThreadId = threadId.trim()
+    if (normalizedThreadId.length === 0) {
+      return
+    }
+
+    const titleCandidate = resolveTitleCandidateFromUserMessage(rawTitle)
+    if (!titleCandidate) {
+      return
+    }
+
+    if (historyTitleOverridesByThreadId.value[normalizedThreadId]) {
+      return
+    }
+
+    historyTitleOverridesByThreadId.value = {
+      ...historyTitleOverridesByThreadId.value,
+      [normalizedThreadId]: titleCandidate,
+    }
+    replaceThreadHistoryTitleIfNeeded(normalizedThreadId, titleCandidate)
   }
 
   function makeApprovalMetricKey(id: JsonRpcId): string {
@@ -1186,13 +1364,14 @@ function parseToolUserInputQuestions(params: Record<string, unknown>): ToolUserI
     }
   }
 
-  function hydrateMessagesFromThread(thread: Record<string, unknown>): void {
+  function hydrateMessagesFromThread(thread: Record<string, unknown>): string | null {
     const turns = Array.isArray(thread.turns) ? thread.turns : []
     const hydratedMessages: UiMessage[] = []
     const newItemIndexMap = new Map<string, number>()
     const newAssistantAnswerByItemId = new Map<string, string>()
     const newReasoningSummaryByTurnId = new Map<string, string>()
     const newReasoningTurnIdByItemId = new Map<string, string>()
+    let firstUserMessageText: string | null = null
 
     for (const turn of turns) {
       if (!isRecord(turn)) {
@@ -1218,6 +1397,9 @@ function parseToolUserInputQuestions(params: Record<string, unknown>): ToolUserI
             .join('\n')
 
           if (text.length > 0) {
+            if (!firstUserMessageText) {
+              firstUserMessageText = text
+            }
             hydratedMessages.push({
               id: makeUiMessageId('user'),
               role: 'user',
@@ -1299,6 +1481,7 @@ function parseToolUserInputQuestions(params: Record<string, unknown>): ToolUserI
     for (const [itemId, turnId] of newReasoningTurnIdByItemId.entries()) {
       reasoningTurnIdByItemId.set(itemId, turnId)
     }
+    return firstUserMessageText
   }
 
   function hydrateFromThreadSnapshot(
@@ -1323,7 +1506,10 @@ function parseToolUserInputQuestions(params: Record<string, unknown>): ToolUserI
       activeThreadId.value = resolvedThreadId
       resumeThreadId.value = resolvedThreadId
     }
-    hydrateMessagesFromThread(thread)
+    const firstUserMessageText = hydrateMessagesFromThread(thread)
+    if (resolvedThreadId) {
+      cacheThreadTitleOverride(resolvedThreadId, firstUserMessageText)
+    }
 
     return resolvedThreadId
   }
@@ -1895,8 +2081,11 @@ function parseToolUserInputQuestions(params: Record<string, unknown>): ToolUserI
 
     try {
       const response = await client.value.request('thread/list', {})
-      const parsedHistory = parseThreadHistoryList(response)
-      const nextHistory = selectThreadHistoryForDisplay(parsedHistory, bridgeCwd.value)
+      const parsedHistory = sortThreadHistoryByUpdatedAt(parseThreadHistoryList(response))
+      const nextHistory = applyThreadHistoryTitleOverrides(
+        parsedHistory,
+        historyTitleOverridesByThreadId.value,
+      )
       threadHistory.value = nextHistory
 
       if (nextHistory.length === 0) {
@@ -1909,16 +2098,11 @@ function parseToolUserInputQuestions(params: Record<string, unknown>): ToolUserI
       if (!hasSelected) {
         selectedHistoryThreadId.value = nextHistory[0]?.id ?? ''
       }
-      const normalizedBridgeCwd = bridgeCwd.value.trim()
-      const matchedCount =
-        normalizedBridgeCwd.length === 0
-          ? 0
-          : parsedHistory.filter((entry) => entry.cwd === normalizedBridgeCwd).length
+      const workspaceKeys = new Set(nextHistory.map((entry) => resolveWorkspaceKeyForThread(entry)))
       pushLog('rpc', 'info', `thread/list completed (${nextHistory.length} threads)`, {
-        total: parsedHistory.length,
-        shown: nextHistory.length,
-        bridgeCwd: normalizedBridgeCwd || null,
-        cwdMatchedCount: matchedCount,
+        total: nextHistory.length,
+        workspaceCount: workspaceKeys.size,
+        bridgeCwd: bridgeCwd.value.trim() || null,
       })
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error)
@@ -1940,10 +2124,15 @@ function parseToolUserInputQuestions(params: Record<string, unknown>): ToolUserI
       const response = await client.value.request('thread/read', {
         threadId: resolvedThreadId,
         id: resolvedThreadId,
+        includeTurns: true,
       })
       const thread = extractThreadFromReadResult(response)
       if (!thread) {
         pushLog('rpc', 'warn', 'thread/read response missing thread payload', response)
+        setUserGuidance(
+          'warn',
+          '履歴の本文を読み取れませんでした。別の履歴を開くか、会話を再開して確認してください。',
+        )
         return
       }
 
@@ -1951,7 +2140,8 @@ function parseToolUserInputQuestions(params: Record<string, unknown>): ToolUserI
       selectedHistoryThreadId.value = readThreadId
       resetConversation()
       readPreviewThreadId.value = readThreadId
-      hydrateMessagesFromThread(thread)
+      const firstUserMessageText = hydrateMessagesFromThread(thread)
+      cacheThreadTitleOverride(readThreadId, firstUserMessageText)
       pushLog('rpc', 'info', `thread/read completed (read-only): ${readThreadId}`, {
         turns: Array.isArray(thread.turns) ? thread.turns.length : 0,
       })
@@ -1960,6 +2150,10 @@ function parseToolUserInputQuestions(params: Record<string, unknown>): ToolUserI
       pushLog('rpc', 'error', `thread/read failed: ${message}`, {
         threadId: resolvedThreadId,
       })
+      setUserGuidance(
+        'warn',
+        `履歴の読み取りに失敗しました。未 materialize な履歴の可能性があります。詳細: ${message}`,
+      )
     }
   }
 
@@ -2046,6 +2240,7 @@ function parseToolUserInputQuestions(params: Record<string, unknown>): ToolUserI
       }
 
       const response = await client.value.request('turn/start', payload)
+      cacheThreadTitleOverride(threadId, text)
 
       if (isRecord(response) && isRecord(response.turn) && typeof response.turn.id === 'string') {
         currentTurnId.value = response.turn.id
@@ -2346,6 +2541,7 @@ function parseToolUserInputQuestions(params: Record<string, unknown>): ToolUserI
     canInterruptTurn,
     canReadSelectedHistoryThread,
     canQuickStartConversation,
+    workspaceHistoryGroups,
     currentToolUserInputRequest,
     currentApproval,
     sendStateHint,

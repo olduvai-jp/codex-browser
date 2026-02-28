@@ -149,3 +149,64 @@ describe('useBridgeClient connect', () => {
     wrapper.unmount()
   })
 })
+
+describe('useBridgeClient sendTurn', () => {
+  beforeEach(() => {
+    bridgeMock.reset()
+  })
+
+  it('does not persist history title override when turn/start fails', async () => {
+    bridgeMock.setRequestHandler(async (method) => {
+      if (method === 'initialize') {
+        return { userAgent: 'mock-codex-agent' }
+      }
+      if (method === 'thread/start') {
+        return { thread: { id: 'thread-send-fail-title-1' } }
+      }
+      if (method === 'turn/start') {
+        throw new Error('turn start offline')
+      }
+      if (method === 'thread/list') {
+        return {
+          threads: [
+            {
+              id: 'thread-send-fail-title-1',
+              title: 'thread-send-fail-title-1',
+              updatedAt: '2026-02-28T12:00:00.000Z',
+            },
+          ],
+        }
+      }
+      throw new Error(`Unexpected method: ${method}`)
+    })
+
+    const wrapper = mount(HostComponent)
+    const vm = wrapper.vm as unknown as {
+      connect: () => Promise<void>
+      startThread: () => Promise<void>
+      sendTurn: () => Promise<void>
+      loadThreadHistory: () => Promise<void>
+      messageInput: string
+      threadHistory: Array<{ id: string; title: string }>
+    }
+
+    await vm.connect()
+    await flushPromises()
+
+    await vm.startThread()
+    await flushPromises()
+
+    vm.messageInput = 'Unsent title candidate must not remain'
+    await vm.sendTurn()
+    await flushPromises()
+
+    await vm.loadThreadHistory()
+    await flushPromises()
+
+    expect(vm.threadHistory).toHaveLength(1)
+    expect(vm.threadHistory[0]?.id).toBe('thread-send-fail-title-1')
+    expect(vm.threadHistory[0]?.title).toBe('thread-send-fail-title-1')
+
+    wrapper.unmount()
+  })
+})

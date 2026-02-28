@@ -5,6 +5,7 @@ import { formatHistoryUpdatedAt } from '@/lib/formatters'
 defineProps<{
   thread: ThreadHistoryEntry
   active: boolean
+  selected: boolean
   disabled: boolean
 }>()
 
@@ -18,7 +19,11 @@ const emit = defineEmits<{
     class="group w-full rounded-xl border px-3 py-2.5 text-left transition-all disabled:cursor-not-allowed disabled:opacity-55"
     :class="active
       ? 'border-accent bg-accent-soft shadow-sm'
-      : 'border-transparent hover:border-border-default hover:bg-surface'"
+      : selected
+        ? 'border-border-default bg-surface'
+        : 'border-transparent hover:border-border-default hover:bg-surface'"
+    data-testid="history-thread-item"
+    :data-thread-id="thread.id"
     :disabled="disabled"
     @click="emit('open', thread.id)"
   >

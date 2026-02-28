@@ -4,7 +4,9 @@ import { flushPromises, mount, type DOMWrapper, type VueWrapper } from '@vue/tes
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 
 import App from '../App.vue'
+import ThreadSidebar from '../components/sidebar/ThreadSidebar.vue'
 import { useBridgeClient } from '../composables/useBridgeClient'
+import type { WorkspaceHistoryGroup } from '../types'
 
 const bridgeMock = vi.hoisted(() => {
   type RequestHandler = (method: string, params: unknown) => unknown | Promise<unknown>
@@ -142,6 +144,20 @@ function getVisibleHistoryThreadLabels(wrapper: VueWrapper<ComponentPublicInstan
     .findAll('aside button p.text-sm.font-medium')
     .map((entry) => entry.text().trim())
     .filter((entry) => entry.length > 0)
+}
+
+function getWorkspaceGroupToggle(
+  wrapper: VueWrapper<ComponentPublicInstance>,
+  workspaceKey: string,
+): DOMWrapper<Element> {
+  const toggle = wrapper
+    .findAll('[data-testid="workspace-group-toggle"]')
+    .find((entry) => entry.attributes('data-workspace-key') === workspaceKey)
+  if (!toggle) {
+    throw new Error(`Expected workspace toggle not found: ${workspaceKey}`)
+  }
+
+  return toggle
 }
 
 function getTimelineKinds(wrapper: VueWrapper<ComponentPublicInstance>): string[] {
@@ -1205,6 +1221,68 @@ describe('App.vue ui phase-1 flows', () => {
     wrapper.unmount()
   })
 
+  it('fills missing history title from the first user message after thread/resume hydration', async () => {
+    bridgeMock.setRequestHandler(async (method) => {
+      if (method === 'initialize') {
+        return { userAgent: 'mock-codex-agent' }
+      }
+
+      if (method === 'thread/list') {
+        return {
+          threads: [
+            {
+              id: 'thread-title-fallback-1',
+              title: 'thread-title-fallback-1',
+              updatedAt: '2026-02-28T11:00:00.000Z',
+            },
+          ],
+        }
+      }
+
+      if (method === 'thread/resume') {
+        return {
+          thread: {
+            id: 'thread-title-fallback-1',
+            turns: [
+              {
+                id: 'turn-title-fallback-1',
+                items: [
+                  {
+                    type: 'userMessage',
+                    content: [
+                      {
+                        type: 'text',
+                        text: 'Title from hydrated first user message',
+                      },
+                    ],
+                  },
+                ],
+              },
+            ],
+          },
+        }
+      }
+
+      throw new Error(`Unexpected method: ${method}`)
+    })
+
+    const { wrapper, bridge } = mountBridgeClientHarness()
+    await bridge.connect()
+    await flushPromises()
+
+    await bridge.loadThreadHistory()
+    await flushPromises()
+
+    expect(bridge.threadHistory.value).toHaveLength(1)
+    expect(bridge.threadHistory.value[0]?.title).toBe('thread-title-fallback-1')
+
+    await bridge.resumeThread('thread-title-fallback-1')
+    await flushPromises()
+
+    expect(bridge.threadHistory.value[0]?.title).toBe('Title from hydrated first user message')
+    wrapper.unmount()
+  })
+
   it('keeps thread/read read-only preview non-activating and blocks send against a different active thread', async () => {
     bridgeMock.setRequestHandler(async (method) => {
       if (method === 'initialize') {
@@ -1265,6 +1343,14 @@ describe('App.vue ui phase-1 flows', () => {
     await bridge.readThread('thread-readonly-preview-1')
     await flushPromises()
 
+    const readCall = bridgeMock.getRequestCalls().find((call) => call.method === 'thread/read')
+    expect(readCall).toBeDefined()
+    expect(readCall?.params).toEqual({
+      threadId: 'thread-readonly-preview-1',
+      id: 'thread-readonly-preview-1',
+      includeTurns: true,
+    })
+
     expect(bridge.activeThreadId.value).toBe('thread-active-readonly-1')
     expect(bridge.selectedHistoryThreadId.value).toBe('thread-readonly-preview-1')
     expect(bridge.messages.value.map((entry) => entry.text)).toEqual([
@@ -1290,17 +1376,24 @@ describe('App.vue ui phase-1 flows', () => {
     wrapper.unmount()
   })
 
-  it('prioritizes cwd-matched history entries and caps sidebar list to 50', async () => {
+  it('groups thread history by workspace, keeps non-current workspaces visible, and caps each group to 50', async () => {
     const historyEntries = [
-      ...Array.from({ length: 10 }, (_value, index) => ({
-        id: `thread-unmatched-${index + 1}`,
-        title: `Unmatched ${index + 1}`,
-        cwd: '/other/workspace',
-      })),
       ...Array.from({ length: 55 }, (_value, index) => ({
-        id: `thread-matched-${index + 1}`,
-        title: `Matched ${index + 1}`,
+        id: `thread-current-${index + 1}`,
+        title: `Current ${index + 1}`,
         cwd: '/workspace/current',
+        updatedAt: `2026-02-28T10:${String(index).padStart(2, '0')}:00.000Z`,
+      })),
+      ...Array.from({ length: 3 }, (_value, index) => ({
+        id: `thread-other-${index + 1}`,
+        title: `Other ${index + 1}`,
+        cwd: '/other/workspace',
+        updatedAt: `2026-02-20T09:0${index}:00.000Z`,
+      })),
+      ...Array.from({ length: 2 }, (_value, index) => ({
+        id: `thread-unknown-${index + 1}`,
+        title: `Unknown ${index + 1}`,
+        updatedAt: `2026-02-19T08:0${index}:00.000Z`,
       })),
     ]
 
@@ -1335,27 +1428,27 @@ describe('App.vue ui phase-1 flows', () => {
     await getByTestId(wrapper, 'history-refresh-button').trigger('click')
     await flushPromises()
 
-    const historyLabelsWithMatch = getVisibleHistoryThreadLabels(wrapper)
-    expect(historyLabelsWithMatch).toHaveLength(50)
-    expect(historyLabelsWithMatch.every((entry) => entry.startsWith('Matched '))).toBe(true)
+    expect(wrapper.text()).toContain('/workspace/current')
+    expect(wrapper.text()).toContain('/other/workspace')
+    expect(wrapper.text()).toContain('(unknown workspace)')
 
-    client.emitMessage({
-      type: 'bridge/status',
-      payload: {
-        event: 'bridge-started',
-        details: {
-          cwd: '/workspace/no-match',
-        },
-      },
-    })
+    const currentWorkspaceToggle = getWorkspaceGroupToggle(wrapper, '/workspace/current')
+    const otherWorkspaceToggle = getWorkspaceGroupToggle(wrapper, '/other/workspace')
+    const unknownWorkspaceToggle = getWorkspaceGroupToggle(wrapper, '(unknown workspace)')
+    expect(currentWorkspaceToggle.text()).toContain('55 件')
+    expect(otherWorkspaceToggle.text()).toContain('3 件')
+    expect(unknownWorkspaceToggle.text()).toContain('2 件')
+
+    const initiallyVisibleLabels = getVisibleHistoryThreadLabels(wrapper)
+    expect(initiallyVisibleLabels).toHaveLength(50)
+    expect(initiallyVisibleLabels.every((entry) => entry.startsWith('Current '))).toBe(true)
+
+    await otherWorkspaceToggle.trigger('click')
     await flushPromises()
 
-    await getByTestId(wrapper, 'history-refresh-button').trigger('click')
-    await flushPromises()
-
-    const historyLabelsFallback = getVisibleHistoryThreadLabels(wrapper)
-    expect(historyLabelsFallback).toHaveLength(50)
-    expect(historyLabelsFallback).toContain('Unmatched 1')
+    const labelsAfterExpandingOther = getVisibleHistoryThreadLabels(wrapper)
+    expect(labelsAfterExpandingOther).toContain('Other 1')
+    expect(labelsAfterExpandingOther).toHaveLength(53)
 
     wrapper.unmount()
   })
@@ -2582,6 +2675,106 @@ describe('App.vue ui phase-1 flows', () => {
     expect(wrapper.text()).toContain('bridge/status: codex-exit')
     expect(wrapper.text()).toContain('Unhandled notification: server/unknownNotification')
     expect(wrapper.text()).toContain('Dropped non-JSON message from bridge websocket')
+
+    wrapper.unmount()
+  })
+})
+
+describe('ThreadSidebar workspace expansion sync', () => {
+  it('expands the new workspace when selected thread moves with unchanged workspace counts', async () => {
+    const initialWorkspaceGroups: WorkspaceHistoryGroup[] = [
+      {
+        workspaceKey: '/workspace-a',
+        workspaceLabel: '/workspace-a',
+        threadCount: 1,
+        latestUpdatedAt: '2026-02-28T12:00:00.000Z',
+        isCurrentWorkspace: false,
+        threads: [
+          {
+            id: 'thread-selected',
+            title: 'Selected Thread',
+            cwd: '/workspace-a',
+            updatedAt: '2026-02-28T12:00:00.000Z',
+          },
+        ],
+      },
+      {
+        workspaceKey: '/workspace-b',
+        workspaceLabel: '/workspace-b',
+        threadCount: 1,
+        latestUpdatedAt: '2026-02-28T11:00:00.000Z',
+        isCurrentWorkspace: false,
+        threads: [
+          {
+            id: 'thread-other',
+            title: 'Other Thread',
+            cwd: '/workspace-b',
+            updatedAt: '2026-02-28T11:00:00.000Z',
+          },
+        ],
+      },
+    ]
+
+    const wrapper = mount(ThreadSidebar, {
+      props: {
+        workspaceGroups: initialWorkspaceGroups,
+        selectedThreadId: 'thread-selected',
+        activeThreadId: '',
+        canRefresh: true,
+        isTurnActive: false,
+        advancedPanelOpen: false,
+      },
+    })
+    await flushPromises()
+
+    expect(
+      wrapper.find('[data-testid="workspace-group-threads"][data-workspace-key="/workspace-a"]').exists(),
+    ).toBe(true)
+    expect(
+      wrapper.find('[data-testid="workspace-group-threads"][data-workspace-key="/workspace-b"]').exists(),
+    ).toBe(false)
+
+    const movedWorkspaceGroups: WorkspaceHistoryGroup[] = [
+      {
+        workspaceKey: '/workspace-a',
+        workspaceLabel: '/workspace-a',
+        threadCount: 1,
+        latestUpdatedAt: '2026-02-28T12:00:00.000Z',
+        isCurrentWorkspace: false,
+        threads: [
+          {
+            id: 'thread-other',
+            title: 'Other Thread',
+            cwd: '/workspace-a',
+            updatedAt: '2026-02-28T11:00:00.000Z',
+          },
+        ],
+      },
+      {
+        workspaceKey: '/workspace-b',
+        workspaceLabel: '/workspace-b',
+        threadCount: 1,
+        latestUpdatedAt: '2026-02-28T11:00:00.000Z',
+        isCurrentWorkspace: false,
+        threads: [
+          {
+            id: 'thread-selected',
+            title: 'Selected Thread',
+            cwd: '/workspace-b',
+            updatedAt: '2026-02-28T12:00:00.000Z',
+          },
+        ],
+      },
+    ]
+
+    await wrapper.setProps({
+      workspaceGroups: movedWorkspaceGroups,
+    })
+    await flushPromises()
+
+    expect(
+      wrapper.find('[data-testid="workspace-group-threads"][data-workspace-key="/workspace-b"]').exists(),
+    ).toBe(true)
 
     wrapper.unmount()
   })

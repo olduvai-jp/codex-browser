@@ -154,6 +154,15 @@ export type ThreadHistoryEntry = {
   source?: string
 }
 
+export type WorkspaceHistoryGroup = {
+  workspaceKey: string
+  workspaceLabel: string
+  threads: ThreadHistoryEntry[]
+  threadCount: number
+  latestUpdatedAt?: string
+  isCurrentWorkspace: boolean
+}
+
 export type ModelOption = {
   id: string
   label: string

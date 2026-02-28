@@ -20,7 +20,7 @@ const {
   messageInput,
   currentTurnId,
   turnStatus,
-  threadHistory,
+  workspaceHistoryGroups,
   modelOptions,
   selectedModelId,
   selectedThinkingEffort,
@@ -97,7 +97,7 @@ onMounted(() => {
         :class="sidebarOpen ? 'max-md:fixed max-md:inset-y-16 max-md:left-0 max-md:z-40 max-md:shadow-lg' : 'max-md:hidden'"
       >
         <ThreadSidebar
-          :threads="threadHistory"
+          :workspace-groups="workspaceHistoryGroups"
           :selected-thread-id="selectedHistoryThreadId"
           :active-thread-id="activeThreadId"
           :can-refresh="isConnected && initialized"

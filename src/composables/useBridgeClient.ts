@@ -245,7 +245,7 @@ function groupThreadHistoryByWorkspace(
 
     grouped.set(workspaceKey, {
       workspaceKey,
-      workspaceLabel: workspaceKey,
+      workspaceLabel: workspaceKey.split('/').filter(Boolean).pop() || workspaceKey,
       threads: [entry],
       threadCount: 1,
       latestUpdatedAt: entry.updatedAt,
@@ -257,7 +257,7 @@ function groupThreadHistoryByWorkspace(
   if (normalizedBridgeCwd.length > 0 && !grouped.has(normalizedBridgeCwd)) {
     grouped.set(normalizedBridgeCwd, {
       workspaceKey: normalizedBridgeCwd,
-      workspaceLabel: normalizedBridgeCwd,
+      workspaceLabel: normalizedBridgeCwd.split('/').filter(Boolean).pop() || normalizedBridgeCwd,
       threads: [],
       threadCount: 0,
       latestUpdatedAt: undefined,
@@ -2062,6 +2062,9 @@ function parseToolUserInputQuestions(params: Record<string, unknown>): ToolUserI
           resetConversation()
         }
 
+        if (resolvedCwd && resolvedCwd.length > 0) {
+          bridgeCwd.value = resolvedCwd
+        }
         activeThreadId.value = nextThreadId
         resumeThreadId.value = nextThreadId
         readPreviewThreadId.value = ''

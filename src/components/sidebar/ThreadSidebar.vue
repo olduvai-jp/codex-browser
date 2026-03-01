@@ -224,7 +224,8 @@ watch(
                   clip-rule="evenodd"
                 />
               </svg>
-              <span class="truncate text-xs font-medium text-text-secondary">{{ group.workspaceLabel }}</span>
+              <span v-if="group.isCurrentWorkspace" class="h-1.5 w-1.5 shrink-0 rounded-full bg-accent" />
+              <span class="truncate text-xs font-medium text-text-secondary" :title="group.workspaceKey">{{ group.workspaceLabel }}</span>
               <span class="text-[11px] text-text-muted">{{ group.threadCount }}</span>
             </button>
             <button

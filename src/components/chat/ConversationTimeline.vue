@@ -182,6 +182,15 @@ function toolActionLabel(toolCall: TimelineToolCall): string {
   return 'ツール実行'
 }
 
+function basename(path: string): string {
+  const segments = path.split('/')
+  return segments[segments.length - 1] || path
+}
+
+function truncateText(text: string, maxLength: number): string {
+  return text.length > maxLength ? text.slice(0, maxLength) + '…' : text
+}
+
 function toolActionSummary(toolCall: TimelineToolCall): string {
   const inputType = pickFirstString(toolCall.input, ['type'])
   if (toolCall.toolName === 'commandExecution' || inputType === 'commandExecution') {
@@ -190,7 +199,7 @@ function toolActionSummary(toolCall: TimelineToolCall): string {
   }
   if (toolCall.toolName === 'fileChange' || inputType === 'fileChange') {
     const path = pickFirstString(toolCall.input, ['path', 'filePath', 'target', 'file'])
-    return path.length > 0 ? path : 'ファイルを更新しました'
+    return path.length > 0 ? basename(path) : 'ファイルを更新しました'
   }
   if (toolCall.toolName === 'mcpToolCall' || inputType === 'mcpToolCall') {
     const mcpName = pickFirstString(toolCall.input, ['toolName', 'tool', 'name'])
@@ -214,12 +223,12 @@ function approvalActionLabel(method: string): string {
 function approvalTargetSummary(entry: TimelineApprovalEntry): string {
   if (entry.method.includes('commandExecution')) {
     const command = pickFirstString(entry.params, ['command', 'cmd'])
-    return command.length > 0 ? `実行予定: ${command}` : '実行内容の確認が必要です'
+    return command.length > 0 ? `実行予定: ${truncateText(command, 80)}` : '実行内容の確認が必要です'
   }
   if (entry.method.includes('fileChange')) {
     const path = pickFirstString(entry.params, ['path', 'filePath', 'target', 'file'])
     if (path.length > 0) {
-      return `変更対象: ${path}`
+      return `変更対象: ${basename(path)}`
     }
     const files = summarizeList((entry.params as Record<string, unknown>).files)
     if (files.length > 0) {
@@ -323,7 +332,7 @@ function toolUserInputSummary(entry: TimelineToolUserInputEntry): string {
           <div class="py-1 pl-11">
             <button
               type="button"
-              class="flex items-center gap-2 rounded-lg px-2 py-1.5 text-sm text-text-secondary transition-colors hover:bg-surface-secondary"
+              class="flex max-w-full items-center gap-2 rounded-lg px-2 py-1.5 text-sm text-text-secondary transition-colors hover:bg-surface-secondary"
               @click="toggleToolExpand(entry.id)"
             >
               <svg
@@ -387,7 +396,7 @@ function toolUserInputSummary(entry: TimelineToolUserInputEntry): string {
                   {{ approvalStateLabel(entry.state, entry.decision) }}
                 </span>
               </div>
-              <p class="mt-2 text-xs text-text-secondary">{{ approvalTargetSummary(entry) }}</p>
+              <p class="mt-2 truncate text-xs text-text-secondary" :title="approvalTargetSummary(entry)">{{ approvalTargetSummary(entry) }}</p>
               <span
                 v-if="entry.state === 'pending' && entry.requestId === currentApprovalRequestId"
                 class="mt-2 inline-block text-xs font-medium text-warning"

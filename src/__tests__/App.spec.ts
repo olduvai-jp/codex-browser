@@ -1431,8 +1431,8 @@ describe('App.vue ui phase-1 flows', () => {
     await groupedButton!.trigger('click')
     await flushPromises()
 
-    expect(wrapper.text()).toContain('/workspace/current')
-    expect(wrapper.text()).toContain('/other/workspace')
+    expect(wrapper.text()).toContain('current')
+    expect(wrapper.text()).toContain('workspace')
     expect(wrapper.text()).toContain('(unknown workspace)')
 
     const currentWorkspaceToggle = getWorkspaceGroupToggle(wrapper, '/workspace/current')

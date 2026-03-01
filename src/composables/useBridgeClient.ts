@@ -276,10 +276,6 @@ function groupThreadHistoryByWorkspace(
       isCurrentWorkspace: group.isCurrentWorkspace,
     }))
     .sort((left, right) => {
-      if (left.isCurrentWorkspace !== right.isCurrentWorkspace) {
-        return left.isCurrentWorkspace ? -1 : 1
-      }
-
       const leftUpdatedAtMs = parseUpdatedAtMs(left.latestUpdatedAt)
       const rightUpdatedAtMs = parseUpdatedAtMs(right.latestUpdatedAt)
       if (leftUpdatedAtMs == null && rightUpdatedAtMs == null) {

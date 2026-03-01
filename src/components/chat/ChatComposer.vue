@@ -62,35 +62,29 @@ function onThinkingChange(event: Event) {
 </script>
 
 <template>
-  <form class="composer border-t border-border-default bg-surface px-4 py-2.5 sm:px-6" @submit.prevent="emit('send')">
-    <div class="mx-auto flex w-full max-w-4xl flex-col gap-1.5">
-      <div class="rounded-xl border border-border-default/70 bg-white/85 p-2 shadow-sm backdrop-blur-sm dark:border-white/10 dark:bg-[#1f1f1f]">
+  <div class="relative px-4 pb-6 pt-2">
+    <!-- Gradient fade -->
+    <div class="pointer-events-none absolute bottom-full left-0 right-0 h-8 bg-gradient-to-t from-chat-bg to-transparent" />
+
+    <form class="mx-auto w-full max-w-[48rem]" @submit.prevent="emit('send')">
+      <div class="rounded-2xl border border-composer-border bg-composer-bg p-3 shadow-sm">
         <textarea
           :value="props.modelValue"
           rows="1"
-          placeholder="Codex に質問してみましょう。ファイルを追加するには @、コマンドには / を使用します"
+          placeholder="Codex にメッセージを送信..."
           :disabled="props.disabled"
-          class="min-h-[42px] w-full resize-none border-none bg-transparent px-2 py-1 text-sm leading-tight text-text-primary placeholder:text-text-tertiary/75 focus:outline-none disabled:cursor-not-allowed disabled:text-text-muted disabled:placeholder:text-text-muted"
+          class="min-h-[52px] w-full resize-none border-none bg-transparent px-1 py-1 text-sm leading-relaxed text-text-primary placeholder:text-text-muted focus:outline-none disabled:cursor-not-allowed disabled:text-text-muted"
           @input="onInput"
           @compositionstart="onCompositionStart"
           @compositionend="onCompositionEnd"
           @keydown.enter.exact="onEnterKeydown"
         />
-        <div class="flex flex-wrap items-center gap-1.5 px-1.5 pb-0.5 pt-1">
-          <button
-            type="button"
-            class="inline-flex h-8 w-8 items-center justify-center rounded-full border border-border-default/70 bg-surface-secondary/75 text-lg leading-none text-text-secondary transition-colors hover:border-border-strong hover:text-text-primary disabled:cursor-not-allowed disabled:opacity-50 dark:border-white/10 dark:bg-black/10"
-            :disabled="props.settingsDisabled"
-            aria-label="ファイル追加 (準備中)"
-            title="ファイル追加 (準備中)"
-          >
-            +
-          </button>
+        <div class="flex items-center gap-1.5 pt-1">
           <div class="relative min-w-0">
             <select
               :value="props.selectedModelId"
               data-testid="model-select"
-              class="h-8 max-w-[12rem] appearance-none rounded-full border border-border-default/70 bg-surface-secondary/70 py-0 pl-3 pr-6 text-xs font-medium text-text-secondary focus:border-accent focus:outline-none disabled:cursor-not-allowed disabled:opacity-60 dark:border-white/10 dark:bg-black/10"
+              class="h-7 max-w-[12rem] appearance-none rounded-lg border-none bg-transparent py-0 pl-2 pr-5 text-xs text-text-muted hover:bg-sidebar-hover focus:outline-none disabled:cursor-not-allowed disabled:opacity-50"
               :disabled="props.settingsDisabled"
               @change="onModelChange"
             >
@@ -98,13 +92,13 @@ function onThinkingChange(event: Event) {
                 {{ option.label }}
               </option>
             </select>
-            <span class="pointer-events-none absolute right-2 top-1/2 -translate-y-1/2 text-xs text-text-tertiary">▾</span>
+            <span class="pointer-events-none absolute right-1.5 top-1/2 -translate-y-1/2 text-[10px] text-text-muted">&#9662;</span>
           </div>
           <div class="relative min-w-0">
             <select
               :value="props.selectedThinkingEffort"
               data-testid="thinking-effort-select"
-              class="h-8 max-w-[6.25rem] appearance-none rounded-full border border-border-default/70 bg-surface-secondary/70 py-0 pl-3 pr-6 text-xs font-medium text-text-secondary focus:border-accent focus:outline-none disabled:cursor-not-allowed disabled:opacity-60 dark:border-white/10 dark:bg-black/10"
+              class="h-7 max-w-[6.25rem] appearance-none rounded-lg border-none bg-transparent py-0 pl-2 pr-5 text-xs text-text-muted hover:bg-sidebar-hover focus:outline-none disabled:cursor-not-allowed disabled:opacity-50"
               :disabled="props.settingsDisabled"
               @change="onThinkingChange"
             >
@@ -113,7 +107,7 @@ function onThinkingChange(event: Event) {
                 {{ effort }}
               </option>
             </select>
-            <span class="pointer-events-none absolute right-2 top-1/2 -translate-y-1/2 text-xs text-text-tertiary">▾</span>
+            <span class="pointer-events-none absolute right-1.5 top-1/2 -translate-y-1/2 text-[10px] text-text-muted">&#9662;</span>
           </div>
           <div class="ml-auto flex items-center gap-2">
             <button
@@ -126,26 +120,13 @@ function onThinkingChange(event: Event) {
               中断
             </button>
             <button
-              type="button"
-              class="inline-flex h-8 w-8 items-center justify-center rounded-full border border-border-default/70 bg-surface-secondary/75 text-text-secondary transition-colors hover:border-border-strong hover:text-text-primary disabled:cursor-not-allowed disabled:opacity-50 dark:border-white/10 dark:bg-black/10"
-              :disabled="props.disabled"
-              aria-label="音声入力 (準備中)"
-              title="音声入力 (準備中)"
-            >
-              <svg viewBox="0 0 24 24" class="h-3.5 w-3.5" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true">
-                <path d="M12 4a3 3 0 0 1 3 3v5a3 3 0 0 1-6 0V7a3 3 0 0 1 3-3Z" />
-                <path d="M5 11a7 7 0 0 0 14 0" />
-                <path d="M12 18v3" />
-              </svg>
-            </button>
-            <button
-              class="inline-flex h-9 w-9 items-center justify-center rounded-full bg-accent text-white shadow-sm transition-colors hover:bg-accent-hover focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus-ring/50 disabled:cursor-not-allowed disabled:opacity-45"
+              class="inline-flex h-8 w-8 items-center justify-center rounded-lg bg-text-primary text-surface transition-colors hover:opacity-80 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus-ring/50 disabled:cursor-not-allowed disabled:opacity-30"
               data-testid="send-turn-button"
               type="submit"
               :disabled="!props.canSend"
               aria-label="送信"
             >
-              <svg viewBox="0 0 24 24" class="h-4.5 w-4.5" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true">
+              <svg viewBox="0 0 24 24" class="h-4 w-4" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true">
                 <path d="M12 5v14" />
                 <path d="m6 11 6-6 6 6" />
               </svg>
@@ -155,12 +136,11 @@ function onThinkingChange(event: Event) {
       </div>
 
       <p
-        class="px-1.5 text-[11px] leading-4"
-        :class="props.hintReady ? 'text-success' : props.disabled ? 'text-warning' : 'text-text-secondary'"
+        class="mt-1.5 text-center text-[11px] leading-4 text-text-muted"
         data-testid="send-state-hint"
       >
         {{ props.sendHint }}
       </p>
-    </div>
-  </form>
+    </form>
+  </div>
 </template>

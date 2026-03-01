@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import { ref } from 'vue'
 import type { TimelineItem, UiMessage } from '@/types'
 
 const props = defineProps<{
@@ -10,6 +11,16 @@ const props = defineProps<{
 type TimelineToolCall = Extract<TimelineItem, { kind: 'tool' }>['toolCall']
 type TimelineApprovalEntry = Extract<TimelineItem, { kind: 'approval' }>
 type TimelineToolUserInputEntry = Extract<TimelineItem, { kind: 'toolUserInput' }>
+
+const expandedTools = ref(new Set<string>())
+
+function toggleToolExpand(id: string): void {
+  if (expandedTools.value.has(id)) {
+    expandedTools.value.delete(id)
+  } else {
+    expandedTools.value.add(id)
+  }
+}
 
 function formatTime(value?: string): string {
   if (typeof value !== 'string' || value.trim().length === 0) {
@@ -39,13 +50,13 @@ function shouldShowSummary(message: UiMessage): boolean {
 
 function toolStateClass(status: string): string {
   if (status === 'completed') {
-    return 'bg-success/10 text-success'
+    return 'text-success'
   }
   if (status === 'failed') {
-    return 'bg-danger/10 text-danger'
+    return 'text-danger'
   }
 
-  return 'bg-accent/10 text-accent'
+  return 'text-accent'
 }
 
 function toolStateLabel(status: string): string {
@@ -61,13 +72,13 @@ function toolStateLabel(status: string): string {
 
 function turnStateClass(status: string): string {
   if (status === 'completed') {
-    return 'bg-success/10 text-success'
+    return 'bg-success'
   }
   if (status === 'failed' || status === 'interrupted') {
-    return 'bg-warning/10 text-warning'
+    return 'bg-warning'
   }
 
-  return 'bg-accent/10 text-accent'
+  return 'bg-accent'
 }
 
 function turnStateLabel(status: string): string {
@@ -175,18 +186,18 @@ function toolActionSummary(toolCall: TimelineToolCall): string {
   const inputType = pickFirstString(toolCall.input, ['type'])
   if (toolCall.toolName === 'commandExecution' || inputType === 'commandExecution') {
     const command = pickFirstString(toolCall.input, ['command', 'cmd'])
-    return command.length > 0 ? `実行内容: ${command}` : 'コマンドを実行しました'
+    return command.length > 0 ? command : 'コマンドを実行しました'
   }
   if (toolCall.toolName === 'fileChange' || inputType === 'fileChange') {
     const path = pickFirstString(toolCall.input, ['path', 'filePath', 'target', 'file'])
-    return path.length > 0 ? `変更対象: ${path}` : 'ファイルを更新しました'
+    return path.length > 0 ? path : 'ファイルを更新しました'
   }
   if (toolCall.toolName === 'mcpToolCall' || inputType === 'mcpToolCall') {
     const mcpName = pickFirstString(toolCall.input, ['toolName', 'tool', 'name'])
-    return mcpName.length > 0 ? `実行ツール: ${mcpName}` : 'MCPツールを実行しました'
+    return mcpName.length > 0 ? mcpName : 'MCPツールを実行しました'
   }
 
-  return toolCall.toolName.length > 0 ? `実行対象: ${toolCall.toolName}` : 'ツール処理を実行しました'
+  return toolCall.toolName.length > 0 ? toolCall.toolName : 'ツール処理を実行しました'
 }
 
 function approvalActionLabel(method: string): string {
@@ -233,114 +244,153 @@ function toolUserInputSummary(entry: TimelineToolUserInputEntry): string {
 </script>
 
 <template>
-  <div class="messages flex flex-1 items-start overflow-y-auto px-4 py-4 sm:px-6" role="log" aria-live="polite">
-    <div class="mx-auto flex w-full max-w-5xl flex-col gap-1">
-      <p
-        v-if="timelineItems.length === 0"
-        class="rounded-2xl border border-dashed border-border-default bg-surface-secondary py-12 text-center text-sm text-text-tertiary"
-      >
-        まだメッセージはありません。
-      </p>
+  <div class="flex-1 overflow-y-auto" role="log" aria-live="polite">
+    <!-- Empty state -->
+    <div
+      v-if="timelineItems.length === 0"
+      class="flex h-full items-center justify-center"
+    >
+      <div class="text-center">
+        <p class="text-2xl font-semibold text-text-secondary">Codex</p>
+        <p class="mt-2 text-sm text-text-muted">何かお手伝いできることはありますか?</p>
+      </div>
+    </div>
 
+    <div v-else class="mx-auto w-full max-w-[48rem] px-4 pb-4">
       <article
         v-for="entry in timelineItems"
         :key="entry.id"
         class="timeline-item w-full"
-        :class="
-          entry.kind === 'message' && entry.message.role === 'user'
-            ? 'ml-auto max-w-[min(46rem,calc(100%-2rem))] rounded-2xl rounded-br-md border border-user-border bg-user-bubble px-3 py-2'
-            : 'px-0 py-1'
-        "
         data-testid="timeline-item"
         :data-timeline-kind="entry.kind"
         :data-timeline-sequence="entry.timelineSequence"
         :data-timeline-role="entry.kind === 'message' ? entry.message.role : undefined"
       >
+        <!-- Message -->
         <template v-if="entry.kind === 'message'">
-          <div class="message flex flex-col gap-1">
-            <div v-if="entry.message.streaming || formatTime(entry.message.createdAt)" class="flex flex-wrap items-center justify-between gap-x-3 gap-y-1 text-[11px] leading-4">
-              <span v-if="entry.message.streaming" class="font-medium text-accent">生成中...</span>
-              <div class="flex items-center gap-2 text-text-muted">
-                <span v-if="formatTime(entry.message.createdAt)">{{ formatTime(entry.message.createdAt) }}</span>
-              </div>
-            </div>
-            <p
-              v-if="shouldShowSummary(entry.message)"
-              class="assistant-summary whitespace-pre-wrap break-words text-xs leading-5 text-text-secondary"
+          <div class="flex gap-4 py-6">
+            <!-- Avatar -->
+            <div
+              class="flex h-7 w-7 shrink-0 items-center justify-center rounded-full text-xs font-semibold"
+              :class="entry.message.role === 'user'
+                ? 'bg-accent text-white'
+                : entry.message.role === 'assistant'
+                  ? 'bg-surface-tertiary text-text-secondary'
+                  : 'bg-surface-secondary text-text-muted'"
             >
-              {{ entry.message.summaryText }}
-            </p>
-            <pre class="whitespace-pre-wrap break-words font-sans text-sm leading-5 text-text-primary">{{ entry.message.text || (entry.message.streaming ? '...' : '') }}</pre>
+              <template v-if="entry.message.role === 'user'">
+                <svg xmlns="http://www.w3.org/2000/svg" class="h-4 w-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                  <path d="M19 21v-2a4 4 0 0 0-4-4H9a4 4 0 0 0-4 4v2" />
+                  <circle cx="12" cy="7" r="4" />
+                </svg>
+              </template>
+              <template v-else-if="entry.message.role === 'assistant'">
+                <svg xmlns="http://www.w3.org/2000/svg" class="h-4 w-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                  <path d="M12 3v2m0 14v2M5.636 5.636l1.414 1.414m9.9 9.9 1.414 1.414M3 12h2m14 0h2M5.636 18.364l1.414-1.414m9.9-9.9 1.414-1.414" />
+                  <circle cx="12" cy="12" r="4" />
+                </svg>
+              </template>
+              <template v-else>
+                <svg xmlns="http://www.w3.org/2000/svg" class="h-4 w-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                  <circle cx="12" cy="12" r="10" />
+                  <line x1="12" y1="16" x2="12" y2="12" />
+                  <line x1="12" y1="8" x2="12.01" y2="8" />
+                </svg>
+              </template>
+            </div>
+            <!-- Content -->
+            <div class="min-w-0 flex-1">
+              <div class="flex items-center gap-2">
+                <p class="text-sm font-semibold text-text-primary">
+                  {{ entry.message.role === 'user' ? 'あなた' : entry.message.role === 'assistant' ? 'Codex' : 'システム' }}
+                </p>
+                <span v-if="entry.message.streaming" class="text-[11px] font-medium text-accent">生成中...</span>
+                <span v-if="formatTime(entry.message.createdAt)" class="text-[11px] text-text-muted">{{ formatTime(entry.message.createdAt) }}</span>
+              </div>
+              <p
+                v-if="shouldShowSummary(entry.message)"
+                class="assistant-summary mt-1 whitespace-pre-wrap break-words text-sm leading-6 text-text-tertiary"
+              >
+                {{ entry.message.summaryText }}
+              </p>
+              <pre class="mt-1 whitespace-pre-wrap break-words font-sans text-[15px] leading-7 text-text-primary">{{ entry.message.text || (entry.message.streaming ? '...' : '') }}</pre>
+            </div>
           </div>
         </template>
 
+        <!-- Tool call -->
         <template v-else-if="entry.kind === 'tool'">
-          <div class="flex flex-col gap-1">
-            <div class="flex flex-wrap items-center gap-2 text-xs">
-              <span class="rounded-full bg-surface-tertiary px-2 py-0.5 font-semibold text-text-secondary">
-                {{ toolActionLabel(entry.toolCall) }}
-              </span>
-              <span
-                class="min-w-0 flex-1 max-w-full truncate text-xs text-text-primary"
-                :title="toolActionSummary(entry.toolCall)"
+          <div class="py-1 pl-11">
+            <button
+              type="button"
+              class="flex items-center gap-2 rounded-lg px-2 py-1.5 text-sm text-text-secondary transition-colors hover:bg-surface-secondary"
+              @click="toggleToolExpand(entry.id)"
+            >
+              <svg
+                xmlns="http://www.w3.org/2000/svg"
+                class="h-3 w-3 shrink-0 text-text-muted transition-transform"
+                :class="expandedTools.has(entry.id) ? 'rotate-90' : ''"
+                viewBox="0 0 20 20"
+                fill="currentColor"
               >
+                <path
+                  fill-rule="evenodd"
+                  d="M7.293 14.707a1 1 0 010-1.414L10.586 10 7.293 6.707a1 1 0 111.414-1.414l4 4a1 1 0 010 1.414l-4 4a1 1 0 01-1.414 0z"
+                  clip-rule="evenodd"
+                />
+              </svg>
+              <span class="font-medium">{{ toolActionLabel(entry.toolCall) }}</span>
+              <span class="min-w-0 truncate text-xs text-text-muted" :title="toolActionSummary(entry.toolCall)">
                 {{ toolActionSummary(entry.toolCall) }}
               </span>
               <span
-                class="rounded-full px-2 py-0.5 font-semibold"
+                class="shrink-0 text-xs font-medium"
                 data-testid="timeline-tool-status"
                 :class="toolStateClass(entry.toolCall.status)"
               >
                 {{ toolStateLabel(entry.toolCall.status) }}
               </span>
-              <span v-if="entry.toolCall.durationMs != null" class="text-text-muted">{{ entry.toolCall.durationMs }} ms</span>
-            </div>
-            <pre
-              v-if="entry.toolCall.outputText.length > 0"
-              class="max-h-44 overflow-auto whitespace-pre-wrap break-words font-mono text-[11px] leading-5 text-text-secondary"
-            >{{ entry.toolCall.outputText }}</pre>
-          </div>
-        </template>
-
-        <template v-else-if="entry.kind === 'turnStatus'">
-          <div class="flex flex-wrap items-center gap-2 text-xs">
-            <span class="rounded-full bg-surface-tertiary px-2 py-0.5 font-semibold text-text-secondary">応答状態</span>
-            <span
-              class="rounded-full px-2 py-0.5 font-semibold"
-              data-testid="timeline-turn-status-state"
-              :class="turnStateClass(entry.status)"
+              <span v-if="entry.toolCall.durationMs != null" class="shrink-0 text-[11px] text-text-muted">{{ entry.toolCall.durationMs }}ms</span>
+            </button>
+            <div
+              v-if="expandedTools.has(entry.id) && entry.toolCall.outputText.length > 0"
+              class="mt-1 ml-5 rounded-lg bg-surface-secondary p-3"
             >
-              {{ turnStateLabel(entry.status) }}
-            </span>
-            <span class="text-xs text-text-primary">{{ turnStatusDescription(entry.status, entry.label) }}</span>
-            <span v-if="formatTime(entry.occurredAt)" class="text-text-muted">{{ formatTime(entry.occurredAt) }}</span>
+              <pre class="max-h-60 overflow-auto whitespace-pre-wrap break-words font-mono text-xs leading-5 text-text-secondary">{{ entry.toolCall.outputText }}</pre>
+            </div>
           </div>
         </template>
 
+        <!-- Turn status -->
+        <template v-else-if="entry.kind === 'turnStatus'">
+          <div class="flex items-center gap-2 py-2 pl-11 text-xs text-text-muted">
+            <span class="h-1.5 w-1.5 shrink-0 rounded-full" :class="turnStateClass(entry.status)" />
+            <span>{{ turnStatusDescription(entry.status, entry.label) }}</span>
+            <span v-if="formatTime(entry.occurredAt)">{{ formatTime(entry.occurredAt) }}</span>
+          </div>
+        </template>
+
+        <!-- Approval -->
         <template v-else-if="entry.kind === 'approval'">
-          <div class="flex flex-col gap-1">
-            <div class="flex flex-wrap items-center gap-2 text-xs">
-              <span class="rounded-full bg-warning/10 px-2 py-0.5 font-semibold text-warning">
-                {{ approvalActionLabel(entry.method) }}
-              </span>
-              <span
-                v-if="entry.method.includes('commandExecution')"
-                class="min-w-0 flex-1 max-w-full truncate text-xs text-text-primary"
-                :title="approvalTargetSummary(entry)"
-              >
-                {{ approvalTargetSummary(entry) }}
-              </span>
-              <span v-else class="text-xs text-text-primary">{{ approvalTargetSummary(entry) }}</span>
-              <span
-                class="rounded-full px-2 py-0.5 font-semibold"
-                data-testid="timeline-approval-state"
-                :class="entry.state === 'pending' ? 'bg-warning/10 text-warning' : 'bg-success/10 text-success'"
-              >
-                {{ approvalStateLabel(entry.state, entry.decision) }}
-              </span>
+          <div class="py-2 pl-11">
+            <div class="rounded-xl border border-warning/30 bg-warning/5 p-4">
+              <div class="flex items-center gap-2">
+                <svg xmlns="http://www.w3.org/2000/svg" class="h-4 w-4 shrink-0 text-warning" viewBox="0 0 20 20" fill="currentColor">
+                  <path fill-rule="evenodd" d="M8.257 3.099c.765-1.36 2.722-1.36 3.486 0l5.58 9.92c.75 1.334-.213 2.98-1.742 2.98H4.42c-1.53 0-2.493-1.646-1.743-2.98l5.58-9.92zM11 13a1 1 0 11-2 0 1 1 0 012 0zm-1-8a1 1 0 00-1 1v3a1 1 0 002 0V6a1 1 0 00-1-1z" clip-rule="evenodd" />
+                </svg>
+                <span class="text-sm font-medium text-warning">{{ approvalActionLabel(entry.method) }}</span>
+                <span
+                  class="ml-auto rounded-full px-2 py-0.5 text-xs font-medium"
+                  data-testid="timeline-approval-state"
+                  :class="entry.state === 'pending' ? 'bg-warning/10 text-warning' : 'bg-success/10 text-success'"
+                >
+                  {{ approvalStateLabel(entry.state, entry.decision) }}
+                </span>
+              </div>
+              <p class="mt-2 text-xs text-text-secondary">{{ approvalTargetSummary(entry) }}</p>
               <span
                 v-if="entry.state === 'pending' && entry.requestId === currentApprovalRequestId"
-                class="text-warning"
+                class="mt-2 inline-block text-xs font-medium text-warning"
               >
                 対応待ち
               </span>
@@ -348,32 +398,37 @@ function toolUserInputSummary(entry: TimelineToolUserInputEntry): string {
           </div>
         </template>
 
+        <!-- Tool user input -->
         <template v-else-if="entry.kind === 'toolUserInput'">
-          <div class="flex flex-col gap-1">
-            <div class="flex flex-wrap items-center gap-2 text-xs">
-              <span class="rounded-full bg-accent/10 px-2 py-0.5 font-semibold text-accent">Input</span>
-              <span class="text-xs text-text-primary">{{ toolUserInputSummary(entry) }}</span>
-              <span
-                class="rounded-full px-2 py-0.5 font-semibold"
-                data-testid="timeline-tool-user-input-state"
-                :class="entry.state === 'pending' ? 'bg-accent/10 text-accent' : 'bg-success/10 text-success'"
-              >
-                {{ toolInputStateLabel(entry.state) }}
-              </span>
+          <div class="py-2 pl-11">
+            <div class="rounded-xl border border-accent/30 bg-accent/5 p-4">
+              <div class="flex items-center gap-2">
+                <svg xmlns="http://www.w3.org/2000/svg" class="h-4 w-4 shrink-0 text-accent" viewBox="0 0 20 20" fill="currentColor">
+                  <path d="M13.586 3.586a2 2 0 112.828 2.828l-.793.793-2.828-2.828.793-.793zM11.379 5.793L3 14.172V17h2.828l8.38-8.379-2.83-2.828z" />
+                </svg>
+                <span class="text-sm font-medium text-text-primary">{{ toolUserInputSummary(entry) }}</span>
+                <span
+                  class="ml-auto rounded-full px-2 py-0.5 text-xs font-medium"
+                  data-testid="timeline-tool-user-input-state"
+                  :class="entry.state === 'pending' ? 'bg-accent/10 text-accent' : 'bg-success/10 text-success'"
+                >
+                  {{ toolInputStateLabel(entry.state) }}
+                </span>
+              </div>
+              <ul class="mt-2 flex flex-col gap-1 text-xs text-text-secondary">
+                <li v-for="question in entry.questions" :key="question.id">- {{ question.label }}</li>
+              </ul>
+              <pre
+                v-if="entry.answers"
+                class="mt-2 max-h-40 overflow-auto whitespace-pre-wrap break-words rounded-lg bg-surface-secondary p-2 font-mono text-[11px] leading-5 text-text-secondary"
+              >{{ stringifyAnswers(entry.answers) }}</pre>
               <span
                 v-if="entry.state === 'pending' && entry.requestId === currentToolUserInputRequestId"
-                class="text-accent"
+                class="mt-2 inline-block text-xs font-medium text-accent"
               >
                 対応待ち
               </span>
             </div>
-            <ul class="flex flex-col gap-0.5 text-xs text-text-secondary">
-              <li v-for="question in entry.questions" :key="question.id">- {{ question.label }}</li>
-            </ul>
-            <pre
-              v-if="entry.answers"
-              class="max-h-40 overflow-auto whitespace-pre-wrap break-words font-mono text-[11px] leading-5 text-text-secondary"
-            >{{ stringifyAnswers(entry.answers) }}</pre>
           </div>
         </template>
       </article>

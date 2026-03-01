@@ -7,15 +7,15 @@
   --font-mono: ui-monospace, Menlo, Monaco, Consolas, 'Liberation Mono',
     'Courier New', monospace;
 
-  --color-surface: #f8fafc;
-  --color-surface-secondary: #f1f5f9;
-  --color-surface-tertiary: #e2e8f0;
-  --color-border-default: #cbd5e1;
-  --color-border-strong: #94a3b8;
-  --color-text-primary: #0f172a;
-  --color-text-secondary: #334155;
-  --color-text-tertiary: #64748b;
-  --color-text-muted: #94a3b8;
+  --color-surface: #ffffff;
+  --color-surface-secondary: #f7f7f8;
+  --color-surface-tertiary: #ececec;
+  --color-border-default: #e5e5e5;
+  --color-border-strong: #d1d1d1;
+  --color-text-primary: #0d0d0d;
+  --color-text-secondary: #374151;
+  --color-text-tertiary: #6b7280;
+  --color-text-muted: #9ca3af;
   --color-accent: #2563eb;
   --color-accent-hover: #1d4ed8;
   --color-accent-soft: #dbeafe;
@@ -24,34 +24,36 @@
   --color-danger: #dc2626;
   --color-danger-soft: #fee2e2;
   --color-focus-ring: #60a5fa;
-  --color-user-bubble: #dbeafe;
-  --color-user-border: #bfdbfe;
-  --color-assistant-bubble: #ffffff;
-  --color-system-bubble: #f1f5f9;
+  --color-sidebar-bg: #f9f9f9;
+  --color-sidebar-hover: #ececec;
+  --color-chat-bg: #ffffff;
+  --color-composer-bg: #f4f4f4;
+  --color-composer-border: #e0e0e0;
 }
 
 @variant dark {
   @theme {
-    --color-surface: #0b1220;
-    --color-surface-secondary: #111b30;
-    --color-surface-tertiary: #1d2a44;
-    --color-border-default: #31415e;
-    --color-border-strong: #4e658e;
-    --color-text-primary: #e8eefc;
-    --color-text-secondary: #bfcae5;
-    --color-text-tertiary: #8ea0c2;
-    --color-text-muted: #6f85ad;
+    --color-surface: #212121;
+    --color-surface-secondary: #2f2f2f;
+    --color-surface-tertiary: #3a3a3a;
+    --color-border-default: #424242;
+    --color-border-strong: #525252;
+    --color-text-primary: #ececec;
+    --color-text-secondary: #b4b4b4;
+    --color-text-tertiary: #8e8e8e;
+    --color-text-muted: #6b6b6b;
     --color-accent: #60a5fa;
     --color-accent-hover: #3b82f6;
-    --color-accent-soft: #183b6e;
+    --color-accent-soft: #1e3a5f;
     --color-success: #34d399;
     --color-warning: #fbbf24;
     --color-danger: #f87171;
     --color-danger-soft: #4a1e28;
     --color-focus-ring: #93c5fd;
-    --color-user-bubble: #1d3e6f;
-    --color-user-border: #3b82f6;
-    --color-assistant-bubble: #111b30;
-    --color-system-bubble: #13213a;
+    --color-sidebar-bg: #171717;
+    --color-sidebar-hover: #2f2f2f;
+    --color-chat-bg: #212121;
+    --color-composer-bg: #2f2f2f;
+    --color-composer-border: #424242;
   }
 }

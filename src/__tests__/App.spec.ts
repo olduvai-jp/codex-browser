@@ -141,7 +141,7 @@ function findRequestCall(method: string): { method: string; params: unknown } | 
 
 function getVisibleHistoryThreadLabels(wrapper: VueWrapper<ComponentPublicInstance>): string[] {
   return wrapper
-    .findAll('aside button p.text-sm.font-medium')
+    .findAll('[data-testid="history-thread-item"] p.text-sm')
     .map((entry) => entry.text().trim())
     .filter((entry) => entry.length > 0)
 }
@@ -232,16 +232,13 @@ describe('App.vue ui phase-1 flows', () => {
     const toggleButton = wrapper.get('button[aria-controls="thread-sidebar"]')
 
     expect(toggleButton.attributes('type')).toBe('button')
-    expect(toggleButton.attributes('aria-expanded')).toBe('false')
-    expect(toggleButton.attributes('aria-label')).toBe('サイドバーを開く')
-    expect(toggleButton.attributes('title')).toBe('サイドバーを開く')
+    // Sidebar is open by default in the new layout
+    expect(toggleButton.attributes('aria-expanded')).toBe('true')
     expect(wrapper.find('#thread-sidebar').exists()).toBe(true)
 
     await toggleButton.trigger('click')
 
-    expect(toggleButton.attributes('aria-expanded')).toBe('true')
-    expect(toggleButton.attributes('aria-label')).toBe('サイドバーを閉じる')
-    expect(toggleButton.attributes('title')).toBe('サイドバーを閉じる')
+    expect(toggleButton.attributes('aria-expanded')).toBe('false')
 
     wrapper.unmount()
   })
@@ -331,7 +328,7 @@ describe('App.vue ui phase-1 flows', () => {
 
     await wrapper.get('textarea').setValue('Hello from test user')
     expect(getByTestId(wrapper, 'send-turn-button').attributes('disabled')).toBeUndefined()
-    await wrapper.get('form.composer').trigger('submit')
+    await wrapper.get('form').trigger('submit')
     await flushPromises()
 
     expect(wrapper.text()).toContain('Hello from test user')
@@ -389,11 +386,8 @@ describe('App.vue ui phase-1 flows', () => {
       (entry) => entry.attributes('data-timeline-role') === 'assistant',
     )
     expect(userMessageEntry).toBeDefined()
-    expect(userMessageEntry?.classes()).toContain('ml-auto')
-    expect(userMessageEntry?.classes()).toContain('bg-user-bubble')
+    expect(userMessageEntry?.classes()).toContain('timeline-item')
     expect(assistantMessageEntry).toBeDefined()
-    expect(assistantMessageEntry?.classes()).not.toContain('bg-user-bubble')
-    expect(assistantMessageEntry?.classes()).not.toContain('border')
 
     client.emitMessage({
       method: 'item/completed',
@@ -446,7 +440,7 @@ describe('App.vue ui phase-1 flows', () => {
     await flushPromises()
 
     await wrapper.get('textarea').setValue('Reasoning summary inline check')
-    await wrapper.get('form.composer').trigger('submit')
+    await wrapper.get('form').trigger('submit')
     await flushPromises()
 
     client.emitMessage({
@@ -479,7 +473,7 @@ describe('App.vue ui phase-1 flows', () => {
     })
     await flushPromises()
 
-    let conversationTexts = wrapper.findAll('.message pre').map((entry) => entry.text())
+    let conversationTexts = wrapper.findAll('[data-timeline-kind="message"] pre').map((entry) => entry.text())
     expect(conversationTexts[conversationTexts.length - 1]).toBe('...')
     expect(wrapper.findAll('.assistant-summary').map((entry) => entry.text())).toContain('Reasoning summary text')
 
@@ -505,7 +499,7 @@ describe('App.vue ui phase-1 flows', () => {
     })
     await flushPromises()
 
-    conversationTexts = wrapper.findAll('.message pre').map((entry) => entry.text())
+    conversationTexts = wrapper.findAll('[data-timeline-kind="message"] pre').map((entry) => entry.text())
     expect(conversationTexts[conversationTexts.length - 1]).toContain('streamed answer')
     expect(wrapper.find('.assistant-summary').exists()).toBe(false)
 
@@ -536,7 +530,7 @@ describe('App.vue ui phase-1 flows', () => {
     await flushPromises()
 
     await wrapper.get('textarea').setValue('Reasoning summary completion check')
-    await wrapper.get('form.composer').trigger('submit')
+    await wrapper.get('form').trigger('submit')
     await flushPromises()
 
     client.emitMessage({
@@ -599,7 +593,7 @@ describe('App.vue ui phase-1 flows', () => {
     })
     await flushPromises()
 
-    const conversationTexts = wrapper.findAll('.message pre').map((entry) => entry.text())
+    const conversationTexts = wrapper.findAll('[data-timeline-kind="message"] pre').map((entry) => entry.text())
     expect(conversationTexts[conversationTexts.length - 1]).toBe('final answer')
     expect(wrapper.find('.assistant-summary').exists()).toBe(false)
     expect(wrapper.text()).not.toContain('Unhandled notification: item/reasoning/summaryTextDelta')
@@ -631,7 +625,7 @@ describe('App.vue ui phase-1 flows', () => {
     await flushPromises()
 
     await wrapper.get('textarea').setValue('Late reasoning completion check')
-    await wrapper.get('form.composer').trigger('submit')
+    await wrapper.get('form').trigger('submit')
     await flushPromises()
 
     client.emitMessage({
@@ -667,7 +661,7 @@ describe('App.vue ui phase-1 flows', () => {
     })
     await flushPromises()
 
-    let conversationTexts = wrapper.findAll('.message pre').map((entry) => entry.text())
+    let conversationTexts = wrapper.findAll('[data-timeline-kind="message"] pre').map((entry) => entry.text())
     expect(conversationTexts[conversationTexts.length - 1]).toBe('final answer first')
 
     client.emitMessage({
@@ -687,7 +681,7 @@ describe('App.vue ui phase-1 flows', () => {
     })
     await flushPromises()
 
-    conversationTexts = wrapper.findAll('.message pre').map((entry) => entry.text())
+    conversationTexts = wrapper.findAll('[data-timeline-kind="message"] pre').map((entry) => entry.text())
     expect(conversationTexts[conversationTexts.length - 1]).toBe('final answer first')
     expect(wrapper.find('.assistant-summary').exists()).toBe(false)
 
@@ -752,7 +746,7 @@ describe('App.vue ui phase-1 flows', () => {
     await getByTestId(wrapper, 'start-thread-button').trigger('click')
     await flushPromises()
     await wrapper.get('textarea').setValue('Timeline order check')
-    await wrapper.get('form.composer').trigger('submit')
+    await wrapper.get('form').trigger('submit')
     await flushPromises()
 
     client.emitMessage({
@@ -811,7 +805,7 @@ describe('App.vue ui phase-1 flows', () => {
 
     const timelineText = getTimelineText(wrapper)
     expect(timelineText).toContain('コマンド実行')
-    expect(timelineText).toContain('実行内容: echo timeline order')
+    expect(timelineText).toContain('echo timeline order')
     expect(timelineText).toContain('コマンド実行の承認')
     expect(timelineText).toContain('実行予定: echo approval timeline')
     expect(timelineText).toContain('入力項目 1件: Reason')
@@ -1096,7 +1090,7 @@ describe('App.vue ui phase-1 flows', () => {
     expect(wrapper.text()).toContain('会話 ID: thread-resume-1')
     expect(wrapper.text()).toContain('応答状態: idle')
 
-    const conversationTexts = wrapper.findAll('.message pre').map((entry) => entry.text())
+    const conversationTexts = wrapper.findAll('[data-timeline-kind="message"] pre').map((entry) => entry.text())
     expect(conversationTexts).toEqual([
       'Hydrated user message',
       'Hydrated assistant reply',
@@ -1183,11 +1177,14 @@ describe('App.vue ui phase-1 flows', () => {
 
     expect(wrapper.text()).toContain('History Thread 1')
     expect(wrapper.text()).toContain('History Thread 2')
-    expect(wrapper.text()).toContain('更新:')
     expect(wrapper.text()).not.toContain('1739793600')
-    expect(getByTestId(wrapper, 'history-open-selected-button').attributes('disabled')).toBeUndefined()
 
-    await getByTestId(wrapper, 'history-open-selected-button').trigger('click')
+    // Click thread directly to open it (new UI uses direct click instead of select-then-open)
+    const threadItem = wrapper.findAll('[data-testid="history-thread-item"]').find(
+      (entry) => entry.attributes('data-thread-id') === 'thread-history-1',
+    )
+    expect(threadItem).toBeDefined()
+    await threadItem!.trigger('click')
     await flushPromises()
 
     const resumeCall = findRequestCall('thread/resume')
@@ -1201,7 +1198,7 @@ describe('App.vue ui phase-1 flows', () => {
     expect(wrapper.text()).toContain('応答状態: idle')
 
     await wrapper.get('textarea').setValue('Send after history resume')
-    await wrapper.get('form.composer').trigger('submit')
+    await wrapper.get('form').trigger('submit')
     await flushPromises()
 
     const turnStartCall = findRequestCall('turn/start')
@@ -1428,6 +1425,12 @@ describe('App.vue ui phase-1 flows', () => {
     await getByTestId(wrapper, 'history-refresh-button').trigger('click')
     await flushPromises()
 
+    // Switch to grouped (WS別) view
+    const groupedButton = wrapper.findAll('aside button').find((b) => b.text().trim() === 'WS別')
+    expect(groupedButton?.exists()).toBe(true)
+    await groupedButton!.trigger('click')
+    await flushPromises()
+
     expect(wrapper.text()).toContain('/workspace/current')
     expect(wrapper.text()).toContain('/other/workspace')
     expect(wrapper.text()).toContain('(unknown workspace)')
@@ -1435,9 +1438,9 @@ describe('App.vue ui phase-1 flows', () => {
     const currentWorkspaceToggle = getWorkspaceGroupToggle(wrapper, '/workspace/current')
     const otherWorkspaceToggle = getWorkspaceGroupToggle(wrapper, '/other/workspace')
     const unknownWorkspaceToggle = getWorkspaceGroupToggle(wrapper, '(unknown workspace)')
-    expect(currentWorkspaceToggle.text()).toContain('55 件')
-    expect(otherWorkspaceToggle.text()).toContain('3 件')
-    expect(unknownWorkspaceToggle.text()).toContain('2 件')
+    expect(currentWorkspaceToggle.text()).toContain('55')
+    expect(otherWorkspaceToggle.text()).toContain('3')
+    expect(unknownWorkspaceToggle.text()).toContain('2')
 
     const initiallyVisibleLabels = getVisibleHistoryThreadLabels(wrapper)
     expect(initiallyVisibleLabels).toHaveLength(50)
@@ -1486,7 +1489,7 @@ describe('App.vue ui phase-1 flows', () => {
     await getByTestId(wrapper, 'start-thread-button').trigger('click')
     await flushPromises()
     await wrapper.get('textarea').setValue('Interrupt me')
-    await wrapper.get('form.composer').trigger('submit')
+    await wrapper.get('form').trigger('submit')
     await flushPromises()
 
     const interruptButton = getByTestId(wrapper, 'interrupt-turn-button')
@@ -1564,7 +1567,7 @@ describe('App.vue ui phase-1 flows', () => {
     await getByTestId(wrapper, 'start-thread-button').trigger('click')
     await flushPromises()
     await wrapper.get('textarea').setValue('Use selected model')
-    await wrapper.get('form.composer').trigger('submit')
+    await wrapper.get('form').trigger('submit')
     await flushPromises()
 
     const turnStartCall = findRequestCall('turn/start')
@@ -1681,7 +1684,7 @@ describe('App.vue ui phase-1 flows', () => {
     await getByTestId(wrapper, 'start-thread-button').trigger('click')
     await flushPromises()
     await wrapper.get('textarea').setValue('Use default effort')
-    await wrapper.get('form.composer').trigger('submit')
+    await wrapper.get('form').trigger('submit')
     await flushPromises()
 
     const turnStartCall = findRequestCall('turn/start')
@@ -1748,7 +1751,7 @@ describe('App.vue ui phase-1 flows', () => {
 
     nowSpy.mockReturnValue(3_500)
     await wrapper.get('textarea').setValue('Measure first send')
-    await wrapper.get('form.composer').trigger('submit')
+    await wrapper.get('form').trigger('submit')
     await flushPromises()
 
     expect(getByTestId(wrapper, 'metric-first-send').text()).toContain('2500 ms')
@@ -1906,7 +1909,7 @@ describe('App.vue ui phase-1 flows', () => {
     await flushPromises()
 
     await wrapper.get('textarea').setValue('this should fail')
-    await wrapper.get('form.composer').trigger('submit')
+    await wrapper.get('form').trigger('submit')
     await flushPromises()
 
     expect(getByTestId(wrapper, 'user-guidance').text()).toContain('メッセージ送信に失敗しました')
@@ -2723,8 +2726,16 @@ describe('ThreadSidebar workspace expansion sync', () => {
         canRefresh: true,
         isTurnActive: false,
         advancedPanelOpen: false,
+        isConnected: true,
+        connectionState: 'connected' as const,
       },
     })
+    await flushPromises()
+
+    // Switch to grouped view mode
+    const groupedButton = wrapper.findAll('button').find((b) => b.text().trim() === 'WS別')
+    expect(groupedButton?.exists()).toBe(true)
+    await groupedButton!.trigger('click')
     await flushPromises()
 
     expect(

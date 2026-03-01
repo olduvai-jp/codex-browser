@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { ref, onMounted } from 'vue'
+import { ref, computed, onMounted } from 'vue'
 import { useBridgeClient } from './composables/useBridgeClient'
 import AppHeader from './components/header/AppHeader.vue'
 import ThreadSidebar from './components/sidebar/ThreadSidebar.vue'
@@ -70,9 +70,15 @@ const {
   bridgeCwd,
 } = useBridgeClient()
 
-const sidebarOpen = ref(false)
+const sidebarOpen = ref(true)
 const advancedPanelOpen = ref(false)
 const workspacePickerOpen = ref(false)
+
+const currentModelLabel = computed(() => {
+  if (!selectedModelId.value) return ''
+  const option = modelOptions.value.find((o) => o.id === selectedModelId.value)
+  return option?.label ?? selectedModelId.value
+})
 
 function handleWorkspaceSelect(cwd: string): void {
   startThread(cwd)
@@ -85,75 +91,75 @@ onMounted(() => {
 </script>
 
 <template>
-  <div class="flex h-screen flex-col bg-surface text-text-primary">
-    <!-- Header -->
-    <AppHeader
-      :connection-state="connectionState"
-      :is-connected="isConnected"
-      :user-guidance="userGuidance"
-      :sidebar-open="sidebarOpen"
-      @connect="connect"
-      @disconnect="disconnect()"
-      @toggle-sidebar="sidebarOpen = !sidebarOpen"
+  <div class="flex h-screen bg-chat-bg text-text-primary">
+    <!-- Sidebar -->
+    <div
+      v-if="sidebarOpen"
+      id="thread-sidebar"
+      class="flex w-[260px] shrink-0 flex-col bg-sidebar-bg transition-all duration-200 max-md:fixed max-md:inset-y-0 max-md:left-0 max-md:z-40 max-md:shadow-lg"
+    >
+      <ThreadSidebar
+        :workspace-groups="workspaceHistoryGroups"
+        :selected-thread-id="selectedHistoryThreadId"
+        :active-thread-id="activeThreadId"
+        :can-refresh="isConnected && initialized"
+        :is-turn-active="isTurnActive"
+        :advanced-panel-open="advancedPanelOpen"
+        :is-connected="isConnected"
+        :connection-state="connectionState"
+        @refresh="loadThreadHistory"
+        @open-thread="resumeThread($event)"
+        @new-thread="startThread()"
+        @new-thread-in-workspace="startThread($event)"
+        @open-workspace-picker="workspacePickerOpen = true"
+        @toggle-advanced-panel="advancedPanelOpen = !advancedPanelOpen"
+        @toggle-sidebar="sidebarOpen = false"
+        @connect="connect"
+        @disconnect="disconnect()"
+      />
+    </div>
+
+    <!-- Overlay for mobile sidebar -->
+    <div
+      v-if="sidebarOpen"
+      class="fixed inset-0 z-30 bg-black/30 md:hidden"
+      @click="sidebarOpen = false"
     />
 
-    <!-- Main Area -->
-    <div class="flex min-h-0 flex-1 bg-surface">
-      <!-- Sidebar -->
-      <div
-        id="thread-sidebar"
-        class="w-72 shrink-0 border-r border-border-default bg-surface-secondary/70 transition-all duration-200"
-        :class="sidebarOpen ? 'max-md:fixed max-md:inset-y-16 max-md:left-0 max-md:z-40 max-md:shadow-lg' : 'max-md:hidden'"
-      >
-        <ThreadSidebar
-          :workspace-groups="workspaceHistoryGroups"
-          :selected-thread-id="selectedHistoryThreadId"
-          :active-thread-id="activeThreadId"
-          :can-refresh="isConnected && initialized"
-          :is-turn-active="isTurnActive"
-          :advanced-panel-open="advancedPanelOpen"
-          @refresh="loadThreadHistory"
-          @open-thread="resumeThread($event)"
-          @new-thread="startThread()"
-          @new-thread-in-workspace="startThread($event)"
-          @open-workspace-picker="workspacePickerOpen = true"
-          @toggle-advanced-panel="advancedPanelOpen = !advancedPanelOpen"
-        />
-      </div>
-
-      <!-- Overlay for mobile sidebar -->
-      <div
-        v-if="sidebarOpen"
-        class="fixed inset-0 z-30 bg-black/30 md:hidden"
-        @click="sidebarOpen = false"
+    <!-- Chat Area -->
+    <div class="flex min-w-0 flex-1 flex-col bg-chat-bg">
+      <!-- Top Bar -->
+      <AppHeader
+        :sidebar-open="sidebarOpen"
+        :user-guidance="userGuidance"
+        :model-label="currentModelLabel"
+        @toggle-sidebar="sidebarOpen = !sidebarOpen"
+        @new-thread="startThread()"
       />
 
-      <!-- Chat Area -->
-      <div class="flex min-w-0 flex-1 flex-col bg-surface">
-        <MessageList
-          :timeline-items="timelineItems"
-          :current-approval-request-id="currentApproval ? String(currentApproval.id) : null"
-          :current-tool-user-input-request-id="currentToolUserInputRequest ? String(currentToolUserInputRequest.id) : null"
-        />
-        <ChatComposer
-          :model-value="messageInput"
-          :can-send="canSendMessage"
-          :can-interrupt="canInterruptTurn"
-          :send-hint="sendStateHint"
-          :hint-ready="canSendMessage"
-          :disabled="!isConnected || !initialized || !activeThreadId || isTurnActive"
-          :settings-disabled="!isConnected || !initialized"
-          :model-options="modelOptions"
-          :selected-model-id="selectedModelId"
-          :selected-thinking-effort="selectedThinkingEffort"
-          :thinking-options="availableThinkingEfforts"
-          @update:model-value="messageInput = $event"
-          @update:selected-model-id="setSelectedModelId"
-          @update:selected-thinking-effort="setSelectedThinkingEffort"
-          @send="sendTurn"
-          @interrupt="interruptTurn"
-        />
-      </div>
+      <MessageList
+        :timeline-items="timelineItems"
+        :current-approval-request-id="currentApproval ? String(currentApproval.id) : null"
+        :current-tool-user-input-request-id="currentToolUserInputRequest ? String(currentToolUserInputRequest.id) : null"
+      />
+      <ChatComposer
+        :model-value="messageInput"
+        :can-send="canSendMessage"
+        :can-interrupt="canInterruptTurn"
+        :send-hint="sendStateHint"
+        :hint-ready="canSendMessage"
+        :disabled="!isConnected || !initialized || !activeThreadId || isTurnActive"
+        :settings-disabled="!isConnected || !initialized"
+        :model-options="modelOptions"
+        :selected-model-id="selectedModelId"
+        :selected-thinking-effort="selectedThinkingEffort"
+        :thinking-options="availableThinkingEfforts"
+        @update:model-value="messageInput = $event"
+        @update:selected-model-id="setSelectedModelId"
+        @update:selected-thinking-effort="setSelectedThinkingEffort"
+        @send="sendTurn"
+        @interrupt="interruptTurn"
+      />
     </div>
 
     <!-- Advanced Panel -->

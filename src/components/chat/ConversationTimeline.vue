@@ -139,6 +139,20 @@ function stringifyAnswers(value: Record<string, { answers: string[] }> | undefin
   return JSON.stringify(value, null, 2)
 }
 
+function isContinuation(index: number): boolean {
+  const entry = props.timelineItems[index]
+  if (!entry || entry.kind !== 'message' || entry.message.role !== 'assistant') return false
+  for (let i = index - 1; i >= 0; i--) {
+    const prev = props.timelineItems[i]
+    if (prev.kind === 'message') {
+      return prev.message.role === 'assistant'
+    }
+    if (prev.kind === 'tool' || prev.kind === 'turnStatus') continue
+    return false
+  }
+  return false
+}
+
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null
 }
@@ -267,7 +281,7 @@ function toolUserInputSummary(entry: TimelineToolUserInputEntry): string {
 
     <div v-else class="mx-auto w-full max-w-[48rem] px-4 pb-4">
       <article
-        v-for="entry in timelineItems"
+        v-for="(entry, idx) in timelineItems"
         :key="entry.id"
         class="timeline-item w-full"
         data-testid="timeline-item"
@@ -277,9 +291,15 @@ function toolUserInputSummary(entry: TimelineToolUserInputEntry): string {
       >
         <!-- Message -->
         <template v-if="entry.kind === 'message'">
-          <div class="flex gap-4 py-6">
-            <!-- Avatar -->
+          <div
+            class="flex"
+            :class="isContinuation(idx)
+              ? 'gap-4 pl-11 pt-0.5'
+              : 'gap-4 py-6'"
+          >
+            <!-- Avatar (hidden for consecutive assistant messages) -->
             <div
+              v-if="!isContinuation(idx)"
               class="flex h-7 w-7 shrink-0 items-center justify-center rounded-full text-xs font-semibold"
               :class="entry.message.role === 'user'
                 ? 'bg-accent text-white'
@@ -309,7 +329,7 @@ function toolUserInputSummary(entry: TimelineToolUserInputEntry): string {
             </div>
             <!-- Content -->
             <div class="min-w-0 flex-1">
-              <div class="flex items-center gap-2">
+              <div v-if="!isContinuation(idx)" class="flex items-center gap-2">
                 <p class="text-sm font-semibold text-text-primary">
                   {{ entry.message.role === 'user' ? 'あなた' : entry.message.role === 'assistant' ? 'Codex' : 'システム' }}
                 </p>
@@ -322,7 +342,10 @@ function toolUserInputSummary(entry: TimelineToolUserInputEntry): string {
               >
                 {{ entry.message.summaryText }}
               </p>
-              <pre class="mt-1 whitespace-pre-wrap break-words font-sans text-[15px] leading-7 text-text-primary">{{ entry.message.text || (entry.message.streaming ? '...' : '') }}</pre>
+              <pre
+                class="whitespace-pre-wrap break-words font-sans text-[15px] leading-7 text-text-primary"
+                :class="isContinuation(idx) ? '' : 'mt-1'"
+              >{{ entry.message.text || (entry.message.streaming ? '...' : '') }}</pre>
             </div>
           </div>
         </template>

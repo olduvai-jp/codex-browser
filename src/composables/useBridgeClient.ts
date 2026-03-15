@@ -13,11 +13,24 @@ import {
   extractThreadFromReadResult,
   isJsonRpcId,
   isRecord,
+  normalizeExecutionModeFromConfigPayload,
+  normalizeExecutionModeRequirements,
   parseModelList,
   parseThreadHistoryList,
   pickStringValue,
 } from '@/lib/parsers'
-import { REASONING_EFFORT_VALUES } from '@/types'
+import {
+  APPROVAL_POLICY_VALUES,
+  EXECUTION_MODE_PRESET_VALUES,
+  REASONING_EFFORT_VALUES,
+  SANDBOX_MODE_VALUES,
+  type ApprovalPolicy,
+  type ExecutionModeConfig,
+  type ExecutionModePreset,
+  type ExecutionModeRequirements,
+  type ExecutionModePresetPair,
+  type SandboxMode,
+} from '@/types'
 import type {
   ApprovalMethodExplanation,
   ConnectionState,
@@ -48,9 +61,16 @@ const MAX_THREADS_PER_WORKSPACE_GROUP = 50
 const MAX_TOOL_CALL_ENTRIES = 100
 const MAX_TOOL_CALL_EVENTS = 40
 const REASONING_EFFORT_SET = new Set<string>(REASONING_EFFORT_VALUES)
+const APPROVAL_POLICY_SET = new Set<string>(APPROVAL_POLICY_VALUES)
+const SANDBOX_MODE_SET = new Set<string>(SANDBOX_MODE_VALUES)
 const UNKNOWN_WORKSPACE_LABEL = '(unknown workspace)'
 const UUID_STRING_PATTERN = /^(?:[0-9a-f]{32}|[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})$/i
 const MAX_TITLE_CANDIDATE_LENGTH = 120
+const DEFAULT_EXECUTION_MODE_PRESET = 'default' as const
+const FULL_AUTO_APPROVAL_POLICY: ApprovalPolicy = 'on-request'
+const FULL_AUTO_SANDBOX_MODE: SandboxMode = 'workspace-write'
+const DANGEROUS_APPROVAL_POLICY: ApprovalPolicy = 'never'
+const DANGEROUS_SANDBOX_MODE: SandboxMode = 'danger-full-access'
 
 type ToolItemType = 'commandExecution' | 'fileChange' | 'mcpToolCall'
 type ToolUserInputAnswers = Record<string, { answers: string[] }>
@@ -173,6 +193,139 @@ function normalizeTitleCandidate(value: string): string | null {
 function hasResolvedThreadTitle(entry: ThreadHistoryEntry): boolean {
   const normalizedTitle = entry.title.trim()
   return normalizedTitle.length > 0 && normalizedTitle !== entry.id && !isUuidString(normalizedTitle)
+}
+
+function buildExecutionModeRequirementsDefault(): ExecutionModeRequirements {
+  return {
+    allowedApprovalPolicies: [FULL_AUTO_APPROVAL_POLICY],
+    allowedSandboxModes: [FULL_AUTO_SANDBOX_MODE],
+  }
+}
+
+function parseConfigVersion(payload: unknown): string | null {
+  if (!isRecord(payload)) {
+    return null
+  }
+
+  const direct = pickStringValue(payload, ['version', 'configVersion'])
+  if (direct) {
+    return direct
+  }
+
+  if (isRecord(payload.result)) {
+    const result = pickStringValue(payload.result, ['version', 'configVersion'])
+    if (result) {
+      return result
+    }
+  }
+
+  return null
+}
+
+function executionModePresetFromValues(
+  approvalPolicy: ApprovalPolicy | '' | null,
+  sandboxMode: SandboxMode | '' | null,
+): ExecutionModePreset {
+  if (approvalPolicy === FULL_AUTO_APPROVAL_POLICY && sandboxMode === FULL_AUTO_SANDBOX_MODE) {
+    return 'full-auto'
+  }
+
+  if (approvalPolicy === DANGEROUS_APPROVAL_POLICY && sandboxMode === DANGEROUS_SANDBOX_MODE) {
+    return 'dangerously-bypass'
+  }
+
+  if (!approvalPolicy || !sandboxMode) {
+    return DEFAULT_EXECUTION_MODE_PRESET
+  }
+
+  return 'custom'
+}
+
+function resolvePresetValues(preset: ExecutionModePreset): {
+  approvalPolicy: ApprovalPolicy
+  sandboxMode: SandboxMode
+} | null {
+  if (preset === 'full-auto') {
+    return { approvalPolicy: FULL_AUTO_APPROVAL_POLICY, sandboxMode: FULL_AUTO_SANDBOX_MODE }
+  }
+
+  if (preset === 'dangerously-bypass') {
+    return {
+      approvalPolicy: DANGEROUS_APPROVAL_POLICY,
+      sandboxMode: DANGEROUS_SANDBOX_MODE,
+    }
+  }
+
+  return null
+}
+
+function isExecutionModePreset(value: string): value is ExecutionModePreset {
+  return EXECUTION_MODE_PRESET_VALUES.includes(value as ExecutionModePreset)
+}
+
+function isExecutionModePresetAllowed(
+  preset: ExecutionModePreset,
+  requirements: ExecutionModeRequirements,
+): boolean {
+  const values = resolvePresetValues(preset)
+  if (!values) {
+    return true
+  }
+
+  return (
+    requirements.allowedApprovalPolicies.includes(values.approvalPolicy) &&
+    requirements.allowedSandboxModes.includes(values.sandboxMode)
+  )
+}
+
+function executionModePayloadFromPreset(preset: ExecutionModePreset): ExecutionModeConfig | null {
+  const values = resolvePresetValues(preset)
+  if (!values) {
+    return null
+  }
+
+  return values
+}
+
+function resetExecutionModeState(
+  executionModeState: {
+    executionModeConfig: { value: ExecutionModeConfig }
+    executionModeCurrentPreset: { value: ExecutionModePreset }
+    selectedExecutionModePreset: { value: ExecutionModePreset }
+  },
+): void {
+  executionModeState.executionModeConfig.value = {
+    approvalPolicy: '',
+    sandboxMode: '',
+  }
+  executionModeState.executionModeCurrentPreset.value = DEFAULT_EXECUTION_MODE_PRESET
+  executionModeState.selectedExecutionModePreset.value = DEFAULT_EXECUTION_MODE_PRESET
+}
+
+function applyExecutionModeStateFromPair(
+  pair: ExecutionModePresetPair,
+  executionModeState: {
+    executionModeConfig: { value: ExecutionModeConfig }
+    executionModeCurrentPreset: { value: ExecutionModePreset }
+    selectedExecutionModePreset: { value: ExecutionModePreset }
+  },
+): void {
+  if (!pair.hasExecutionModeValues) {
+    return
+  }
+
+  if (!pair.isComplete || !pair.approvalPolicy || !pair.sandboxMode) {
+    resetExecutionModeState(executionModeState)
+    return
+  }
+
+  executionModeState.executionModeConfig.value = {
+    approvalPolicy: pair.approvalPolicy,
+    sandboxMode: pair.sandboxMode,
+  }
+  const nextPreset = executionModePresetFromValues(pair.approvalPolicy, pair.sandboxMode)
+  executionModeState.executionModeCurrentPreset.value = nextPreset
+  executionModeState.selectedExecutionModePreset.value = nextPreset
 }
 
 function applyThreadHistoryTitleOverrides(
@@ -312,6 +465,12 @@ export function useBridgeClient() {
   const selectedModelId = ref('')
   const selectedThinkingEffort = ref<ReasoningEffort | ''>('')
   const configSnapshot = ref<unknown | null>(null)
+  const executionModeConfig = ref<ExecutionModeConfig>({ approvalPolicy: '', sandboxMode: '' })
+  const executionModeCurrentPreset = ref<ExecutionModePreset>(DEFAULT_EXECUTION_MODE_PRESET)
+  const selectedExecutionModePreset = ref<ExecutionModePreset>(DEFAULT_EXECUTION_MODE_PRESET)
+  const executionModeRequirements = ref<ExecutionModeRequirements>(buildExecutionModeRequirementsDefault())
+  const executionModeConfigVersion = ref<string>('')
+  const isExecutionModeSaving = ref(false)
   const quickStartInProgress = ref(false)
   const userGuidance = ref<UserGuidance | null>(null)
   const bridgeCwd = ref('')
@@ -1912,6 +2071,12 @@ function parseToolUserInputQuestions(params: Record<string, unknown>): ToolUserI
     toolUserInputTimelineEntryIdByRequestKey.clear()
     approvalTimeline.value = []
     toolUserInputTimeline.value = []
+    executionModeConfig.value = { approvalPolicy: '', sandboxMode: '' }
+    executionModeCurrentPreset.value = DEFAULT_EXECUTION_MODE_PRESET
+    selectedExecutionModePreset.value = DEFAULT_EXECUTION_MODE_PRESET
+    executionModeRequirements.value = buildExecutionModeRequirementsDefault()
+    executionModeConfigVersion.value = ''
+    isExecutionModeSaving.value = false
     bridgeCwd.value = ''
     connectionState.value = 'disconnected'
   }
@@ -2017,6 +2182,8 @@ function parseToolUserInputQuestions(params: Record<string, unknown>): ToolUserI
         await startThread()
       }
 
+      await loadConfig()
+
       if (activeThreadId.value.trim().length > 0) {
         pushLog('rpc', 'info', `Quick start ready: ${activeThreadId.value}`)
         clearUserGuidance()
@@ -2061,6 +2228,15 @@ function parseToolUserInputQuestions(params: Record<string, unknown>): ToolUserI
         if (resolvedCwd && resolvedCwd.length > 0) {
           bridgeCwd.value = resolvedCwd
         }
+        const responseVersion = parseConfigVersion(response)
+        if (responseVersion) {
+          executionModeConfigVersion.value = responseVersion
+        }
+        applyExecutionModeStateFromPair(normalizeExecutionModeFromConfigPayload(response), {
+          executionModeConfig,
+          executionModeCurrentPreset: executionModeCurrentPreset,
+          selectedExecutionModePreset: selectedExecutionModePreset,
+        })
         activeThreadId.value = nextThreadId
         resumeThreadId.value = nextThreadId
         readPreviewThreadId.value = ''
@@ -2212,6 +2388,18 @@ function parseToolUserInputQuestions(params: Record<string, unknown>): ToolUserI
         isRecord(response) && isRecord(response.thread) ? response.thread : extractThreadFromReadResult(response)
       if (thread) {
         const hydratedThreadId = hydrateFromThreadSnapshot(thread, resolvedThreadId)
+        applyExecutionModeStateFromPair(
+          normalizeExecutionModeFromConfigPayload(response),
+          {
+            executionModeConfig,
+            executionModeCurrentPreset: executionModeCurrentPreset,
+            selectedExecutionModePreset: selectedExecutionModePreset,
+          },
+        )
+        const responseVersion = parseConfigVersion(response)
+        if (responseVersion) {
+          executionModeConfigVersion.value = responseVersion
+        }
         selectedHistoryThreadId.value = hydratedThreadId ?? resolvedThreadId
         historyResumeSuccessCount.value += 1
         pushLog('rpc', 'info', `thread/resume completed: ${hydratedThreadId ?? resolvedThreadId}`, {
@@ -2274,6 +2462,18 @@ function parseToolUserInputQuestions(params: Record<string, unknown>): ToolUserI
       }
 
       const response = await client.value.request('turn/start', payload)
+      applyExecutionModeStateFromPair(
+        normalizeExecutionModeFromConfigPayload(response),
+        {
+          executionModeConfig,
+          executionModeCurrentPreset: executionModeCurrentPreset,
+          selectedExecutionModePreset: selectedExecutionModePreset,
+        },
+      )
+      const responseVersion = parseConfigVersion(response)
+      if (responseVersion) {
+        executionModeConfigVersion.value = responseVersion
+      }
       cacheThreadTitleOverride(threadId, text)
 
       if (isRecord(response) && isRecord(response.turn) && typeof response.turn.id === 'string') {
@@ -2390,12 +2590,110 @@ function parseToolUserInputQuestions(params: Record<string, unknown>): ToolUserI
     }
 
     try {
-      const response = await client.value.request('config/read', {})
+      const configReadParams: Record<string, unknown> = {
+        includeLayers: true,
+      }
+      const resolvedCwd = bridgeCwd.value.trim()
+      if (resolvedCwd.length > 0) {
+        configReadParams.cwd = resolvedCwd
+      }
+      const response = await client.value.request('config/read', configReadParams)
+      let requirementsResponse: unknown | null = null
+      try {
+        requirementsResponse = await client.value.request('configRequirements/read', undefined)
+      } catch (error) {
+        const message = error instanceof Error ? error.message : String(error)
+        pushLog('rpc', 'warn', `configRequirements/read failed: ${message}`)
+      }
+
       configSnapshot.value = extractConfigPayload(response)
+      const nextVersion = parseConfigVersion(response)
+      if (nextVersion) {
+        executionModeConfigVersion.value = nextVersion
+      }
+      if (requirementsResponse !== null) {
+        executionModeRequirements.value = normalizeExecutionModeRequirements(requirementsResponse)
+      }
+      applyExecutionModeStateFromPair(
+        normalizeExecutionModeFromConfigPayload(response),
+        {
+          executionModeConfig,
+          executionModeCurrentPreset: executionModeCurrentPreset,
+          selectedExecutionModePreset: selectedExecutionModePreset,
+        },
+      )
       pushLog('rpc', 'info', 'config/read completed', configSnapshot.value)
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error)
       pushLog('rpc', 'error', `config/read failed: ${message}`)
+    }
+  }
+
+  function setSelectedExecutionModePreset(value: string): void {
+    if (!isExecutionModePreset(value)) {
+      selectedExecutionModePreset.value = DEFAULT_EXECUTION_MODE_PRESET
+      return
+    }
+
+    if (!isExecutionModePresetAllowed(value, executionModeRequirements.value)) {
+      return
+    }
+
+    selectedExecutionModePreset.value = value
+  }
+
+  async function saveExecutionModeConfig(): Promise<void> {
+    if (!client.value || !isConnected.value || !initialized.value) {
+      return
+    }
+    if (isExecutionModeSaving.value) {
+      return
+    }
+
+    const presetValues = executionModePayloadFromPreset(selectedExecutionModePreset.value)
+    if (!presetValues) {
+      return
+    }
+    if (!isExecutionModePresetAllowed(selectedExecutionModePreset.value, executionModeRequirements.value)) {
+      setUserGuidance('warn', '選択された実行モードは制約により保存できません。')
+      return
+    }
+
+    isExecutionModeSaving.value = true
+    try {
+      const payload: Record<string, unknown> = {
+        reloadUserConfig: true,
+        edits: [
+          {
+            keyPath: 'approval_policy',
+            value: presetValues.approvalPolicy,
+            mergeStrategy: 'upsert',
+          },
+          {
+            keyPath: 'sandbox_mode',
+            value: presetValues.sandboxMode,
+            mergeStrategy: 'upsert',
+          },
+        ],
+      }
+      if (executionModeConfigVersion.value.length > 0) {
+        payload.expectedVersion = executionModeConfigVersion.value
+      }
+
+      const response = await client.value.request('config/batchWrite', payload)
+      const nextVersion = parseConfigVersion(response)
+      if (nextVersion) {
+        executionModeConfigVersion.value = nextVersion
+      }
+      pushLog('rpc', 'info', 'config/batchWrite completed', response)
+      await loadConfig()
+      executionModeCurrentPreset.value = selectedExecutionModePreset.value
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error)
+      pushLog('rpc', 'error', `config/batchWrite failed: ${message}`)
+      setUserGuidance('error', `実行モード保存に失敗しました: ${message}`)
+    } finally {
+      isExecutionModeSaving.value = false
     }
   }
 
@@ -2550,6 +2848,12 @@ function parseToolUserInputQuestions(params: Record<string, unknown>): ToolUserI
     selectedModelId,
     selectedThinkingEffort,
     configSnapshot,
+    executionModeConfig,
+    executionModeCurrentPreset,
+    selectedExecutionModePreset,
+    executionModeRequirements,
+    executionModeConfigVersion,
+    isExecutionModeSaving,
     quickStartInProgress,
     userGuidance,
     messages,
@@ -2601,6 +2905,8 @@ function parseToolUserInputQuestions(params: Record<string, unknown>): ToolUserI
     setSelectedModelId,
     setSelectedThinkingEffort,
     loadConfig,
+    setSelectedExecutionModePreset,
+    saveExecutionModeConfig,
     respondToToolUserInput,
     cancelToolUserInputRequest,
     respondToApproval,

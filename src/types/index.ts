@@ -16,6 +16,43 @@ export const REASONING_EFFORT_VALUES = [
 ] as const
 export type ReasoningEffort = (typeof REASONING_EFFORT_VALUES)[number]
 
+export const APPROVAL_POLICY_VALUES = ['on-request', 'on-failure', 'never', 'untrusted'] as const
+export type ApprovalPolicy = (typeof APPROVAL_POLICY_VALUES)[number]
+
+export const SANDBOX_MODE_VALUES = ['read-only', 'workspace-write', 'danger-full-access'] as const
+export type SandboxMode = (typeof SANDBOX_MODE_VALUES)[number]
+
+export const EXECUTION_MODE_PRESET_VALUES = [
+  'default',
+  'full-auto',
+  'dangerously-bypass',
+  'custom',
+] as const
+export type ExecutionModePreset = (typeof EXECUTION_MODE_PRESET_VALUES)[number]
+
+export const EXECUTION_MODE_SELECTABLE_PRESET_VALUES = [
+  'full-auto',
+  'dangerously-bypass',
+] as const
+export type ExecutionModeSelectablePreset = (typeof EXECUTION_MODE_SELECTABLE_PRESET_VALUES)[number]
+
+export type ExecutionModeConfig = {
+  approvalPolicy: ApprovalPolicy | ''
+  sandboxMode: SandboxMode | ''
+}
+
+export type ExecutionModeRequirements = {
+  allowedApprovalPolicies: ApprovalPolicy[]
+  allowedSandboxModes: SandboxMode[]
+}
+
+export type ExecutionModePresetPair = {
+  approvalPolicy: ApprovalPolicy | null
+  sandboxMode: SandboxMode | null
+  hasExecutionModeValues: boolean
+  isComplete: boolean
+}
+
 export type UiMessage = {
   id: string
   role: 'user' | 'assistant' | 'system'

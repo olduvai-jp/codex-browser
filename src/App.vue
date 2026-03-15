@@ -29,6 +29,10 @@ const {
   userGuidance,
   logs,
   toolCalls,
+  executionModeCurrentPreset,
+  selectedExecutionModePreset,
+  executionModeRequirements,
+  isExecutionModeSaving,
   toolUserInputRequests,
   approvals,
   timelineItems,
@@ -63,6 +67,8 @@ const {
   interruptTurn,
   setSelectedModelId,
   setSelectedThinkingEffort,
+  setSelectedExecutionModePreset,
+  saveExecutionModeConfig,
   loadConfig,
   respondToToolUserInput,
   cancelToolUserInputRequest,
@@ -154,9 +160,15 @@ onMounted(() => {
         :selected-model-id="selectedModelId"
         :selected-thinking-effort="selectedThinkingEffort"
         :thinking-options="availableThinkingEfforts"
+        :current-execution-mode-preset="executionModeCurrentPreset"
+        :selected-execution-mode-preset="selectedExecutionModePreset"
+        :execution-mode-requirements="executionModeRequirements"
+        :execution-mode-saving="isExecutionModeSaving"
         @update:model-value="messageInput = $event"
         @update:selected-model-id="setSelectedModelId"
         @update:selected-thinking-effort="setSelectedThinkingEffort"
+        @update:selected-execution-mode-preset="setSelectedExecutionModePreset"
+        @save-execution-mode-config="saveExecutionModeConfig"
         @send="sendTurn"
         @interrupt="interruptTurn"
       />

@@ -1828,18 +1828,622 @@ describe('App.vue ui phase-1 flows', () => {
     await connectAndInitialize(wrapper)
     await openAdvancedPanel(wrapper)
 
-    expect(wrapper.text()).toContain('まだ設定情報はありません。')
+    const initialConfigCalls = bridgeMock.getRequestCalls().filter((call) => call.method === 'config/read')
+    expect(initialConfigCalls.length).toBeGreaterThan(0)
 
     await getByTestId(wrapper, 'load-config-button').trigger('click')
     await flushPromises()
 
-    const configCall = findRequestCall('config/read')
-    expect(configCall).toBeDefined()
-    expect(configCall?.params).toEqual({})
+    const configCalls = bridgeMock.getRequestCalls().filter((call) => call.method === 'config/read')
+    expect(configCalls).toHaveLength(initialConfigCalls.length + 1)
+    expect(configCalls[configCalls.length - 1]?.params).toEqual({ includeLayers: true })
     expect(wrapper.text()).toContain('approvalPolicy')
     expect(wrapper.text()).toContain('on-request')
     expect(wrapper.text()).toContain('workspace-write')
 
+    wrapper.unmount()
+  })
+
+  it('auto-loads execution mode config during quick start so the composer reflects current restrictions', async () => {
+    bridgeMock.setRequestHandler(async (method) => {
+      if (method === 'initialize') {
+        return { userAgent: 'mock-codex-agent' }
+      }
+
+      if (method === 'thread/list') {
+        return { threads: [] }
+      }
+
+      if (method === 'thread/start') {
+        return {
+          thread: { id: 'thread-execution-mode-autoload-1' },
+          result: {
+            values: {
+              approvalPolicy: 'never',
+            },
+          },
+        }
+      }
+
+      if (method === 'config/read') {
+        return {
+          version: 'v-config-autoload-1',
+          result: {
+            values: {
+              approvalPolicy: 'on-request',
+              sandboxMode: 'workspace-write',
+            },
+          },
+        }
+      }
+
+      if (method === 'configRequirements/read') {
+        return {
+          requirements: {
+            allowedApprovalPolicies: ['on-request'],
+            allowedSandboxModes: ['workspace-write'],
+          },
+        }
+      }
+
+      throw new Error(`Unexpected method: ${method}`)
+    })
+
+    const wrapper = mount(App)
+    await flushPromises()
+    await flushPromises()
+
+    expect(findRequestCall('config/read')?.params).toEqual({ includeLayers: true })
+    expect(findRequestCall('configRequirements/read')?.params).toBeUndefined()
+    expect(wrapper.text()).toContain('会話 ID: thread-execution-mode-autoload-1')
+    expect((wrapper.get('select[data-testid="execution-mode-select"]').element as HTMLSelectElement).value).toBe(
+      'full-auto',
+    )
+    expect(getByTestId(wrapper, 'execution-mode-current-label').text()).toContain('full-auto')
+    expect(
+      wrapper
+        .get('select[data-testid="execution-mode-select"]')
+        .find('option[value="dangerously-bypass"]')
+        .attributes('disabled'),
+    ).toBeDefined()
+
+    wrapper.unmount()
+  })
+
+  it('loads execution mode config and applies requirements from configRequirements/read', async () => {
+    bridgeMock.setRequestHandler(async (method) => {
+      if (method === 'initialize') {
+        return { userAgent: 'mock-codex-agent' }
+      }
+
+      if (method === 'config/read') {
+        return {
+          version: 'v-config-1',
+          result: {
+            values: {
+              approvalPolicy: 'on-request',
+              sandbox: 'workspace-write',
+            },
+          },
+        }
+      }
+
+      if (method === 'configRequirements/read') {
+        return {
+          requirements: {
+            allowedApprovalPolicies: ['on-request'],
+            allowedSandboxModes: ['workspace-write', 'read-only'],
+          },
+        }
+      }
+
+      throw new Error(`Unexpected method: ${method}`)
+    })
+
+    const wrapper = mount(App)
+    await connectAndInitialize(wrapper)
+    await openAdvancedPanel(wrapper)
+
+    await getByTestId(wrapper, 'load-config-button').trigger('click')
+    await flushPromises()
+
+    const select = wrapper.get('select[data-testid="execution-mode-select"]')
+    expect((select.element as HTMLSelectElement).value).toBe('full-auto')
+    const dangerOption = select.find('option[value="dangerously-bypass"]')
+    expect(dangerOption.attributes('disabled')).toBeDefined()
+    expect(findRequestCall('configRequirements/read')?.params).toBeUndefined()
+    wrapper.unmount()
+  })
+
+  it('allows dangerous execution mode when configRequirements/read returns requirements null', async () => {
+    bridgeMock.setRequestHandler(async (method) => {
+      if (method === 'initialize') {
+        return { userAgent: 'mock-codex-agent' }
+      }
+
+      if (method === 'config/read') {
+        return {
+          result: {
+            values: {
+              approvalPolicy: 'on-request',
+              sandbox: 'workspace-write',
+            },
+          },
+        }
+      }
+
+      if (method === 'configRequirements/read') {
+        return {
+          requirements: null,
+        }
+      }
+
+      throw new Error(`Unexpected method: ${method}`)
+    })
+
+    const wrapper = mount(App)
+    await connectAndInitialize(wrapper)
+    await openAdvancedPanel(wrapper)
+
+    await getByTestId(wrapper, 'load-config-button').trigger('click')
+    await flushPromises()
+
+    const dangerOption = wrapper
+      .get('select[data-testid="execution-mode-select"]')
+      .find('option[value="dangerously-bypass"]')
+    expect(dangerOption.attributes('disabled')).toBeUndefined()
+    wrapper.unmount()
+  })
+
+  it('keeps dangerous execution mode disabled when configRequirements/read fails', async () => {
+    bridgeMock.setRequestHandler(async (method) => {
+      if (method === 'initialize') {
+        return { userAgent: 'mock-codex-agent' }
+      }
+
+      if (method === 'config/read') {
+        return {
+          result: {
+            values: {
+              approvalPolicy: 'on-request',
+              sandbox: 'workspace-write',
+            },
+          },
+        }
+      }
+
+      if (method === 'configRequirements/read') {
+        throw new Error('requirements unavailable')
+      }
+
+      throw new Error(`Unexpected method: ${method}`)
+    })
+
+    const wrapper = mount(App)
+    await connectAndInitialize(wrapper)
+    await openAdvancedPanel(wrapper)
+
+    await getByTestId(wrapper, 'load-config-button').trigger('click')
+    await flushPromises()
+
+    const dangerOption = wrapper
+      .get('select[data-testid="execution-mode-select"]')
+      .find('option[value="dangerously-bypass"]')
+    expect(dangerOption.attributes('disabled')).toBeDefined()
+    wrapper.unmount()
+  })
+
+  it('keeps dangerous execution mode disabled when configRequirements/read succeeds with an empty payload', async () => {
+    bridgeMock.setRequestHandler(async (method) => {
+      if (method === 'initialize') {
+        return { userAgent: 'mock-codex-agent' }
+      }
+
+      if (method === 'config/read') {
+        return {
+          result: {
+            values: {
+              approvalPolicy: 'on-request',
+              sandbox: 'workspace-write',
+            },
+          },
+        }
+      }
+
+      if (method === 'configRequirements/read') {
+        return {}
+      }
+
+      throw new Error(`Unexpected method: ${method}`)
+    })
+
+    const wrapper = mount(App)
+    await connectAndInitialize(wrapper)
+    await openAdvancedPanel(wrapper)
+
+    await getByTestId(wrapper, 'load-config-button').trigger('click')
+    await flushPromises()
+
+    const dangerOption = wrapper
+      .get('select[data-testid="execution-mode-select"]')
+      .find('option[value="dangerously-bypass"]')
+    expect(dangerOption.attributes('disabled')).toBeDefined()
+    wrapper.unmount()
+  })
+
+  it('clears execution mode state when a response only includes a partial execution mode payload', async () => {
+    bridgeMock.setRequestHandler(async (method) => {
+      if (method === 'initialize') {
+        return { userAgent: 'mock-codex-agent' }
+      }
+
+      if (method === 'config/read') {
+        return {
+          result: {
+            values: {
+              approvalPolicy: 'never',
+              sandboxMode: 'danger-full-access',
+            },
+          },
+        }
+      }
+
+      if (method === 'configRequirements/read') {
+        return {
+          allowedApprovalPolicies: ['on-request', 'never'],
+          allowedSandboxModes: ['workspace-write', 'danger-full-access'],
+        }
+      }
+
+      if (method === 'thread/start') {
+        return {
+          thread: { id: 'thread-execution-mode-partial-1' },
+          result: {
+            values: {
+              approvalPolicy: 'never',
+            },
+          },
+        }
+      }
+
+      throw new Error(`Unexpected method: ${method}`)
+    })
+
+    const { wrapper, bridge } = mountBridgeClientHarness()
+    await bridge.connect()
+    await flushPromises()
+
+    await bridge.loadConfig()
+    await flushPromises()
+
+    expect(bridge.executionModeCurrentPreset.value).toBe('dangerously-bypass')
+
+    await bridge.startThread()
+    await flushPromises()
+
+    expect(bridge.executionModeConfig.value).toEqual({
+      approvalPolicy: '',
+      sandboxMode: '',
+    })
+    expect(bridge.executionModeCurrentPreset.value).toBe('default')
+    expect(bridge.selectedExecutionModePreset.value).toBe('default')
+
+    wrapper.unmount()
+  })
+
+  it('keeps execution mode state when thread/start response has no execution mode values', async () => {
+    bridgeMock.setRequestHandler(async (method) => {
+      if (method === 'initialize') {
+        return { userAgent: 'mock-codex-agent' }
+      }
+
+      if (method === 'config/read') {
+        return {
+          result: {
+            values: {
+              approvalPolicy: 'never',
+              sandboxMode: 'danger-full-access',
+            },
+          },
+        }
+      }
+
+      if (method === 'configRequirements/read') {
+        return {
+          allowedApprovalPolicies: ['on-request', 'never'],
+          allowedSandboxModes: ['workspace-write', 'danger-full-access'],
+        }
+      }
+
+      if (method === 'thread/start') {
+        return {
+          thread: { id: 'thread-execution-mode-no-values-1' },
+        }
+      }
+
+      throw new Error(`Unexpected method: ${method}`)
+    })
+
+    const { wrapper, bridge } = mountBridgeClientHarness()
+    await bridge.connect()
+    await flushPromises()
+
+    await bridge.loadConfig()
+    await flushPromises()
+
+    expect(bridge.executionModeCurrentPreset.value).toBe('dangerously-bypass')
+
+    await bridge.startThread()
+    await flushPromises()
+
+    expect(bridge.executionModeConfig.value).toEqual({
+      approvalPolicy: 'never',
+      sandboxMode: 'danger-full-access',
+    })
+    expect(bridge.executionModeCurrentPreset.value).toBe('dangerously-bypass')
+    expect(bridge.selectedExecutionModePreset.value).toBe('dangerously-bypass')
+
+    wrapper.unmount()
+  })
+
+  it('keeps execution mode state when turn/start response has no execution mode values', async () => {
+    bridgeMock.setRequestHandler(async (method, params) => {
+      if (method === 'initialize') {
+        return { userAgent: 'mock-codex-agent' }
+      }
+
+      if (method === 'config/read') {
+        return {
+          result: {
+            values: {
+              approvalPolicy: 'never',
+              sandboxMode: 'danger-full-access',
+            },
+          },
+        }
+      }
+
+      if (method === 'configRequirements/read') {
+        return {
+          allowedApprovalPolicies: ['on-request', 'never'],
+          allowedSandboxModes: ['workspace-write', 'danger-full-access'],
+        }
+      }
+
+      if (method === 'thread/start') {
+        return {
+          thread: { id: 'thread-execution-mode-turn-no-values-1' },
+          result: {
+            values: {
+              approvalPolicy: 'never',
+              sandboxMode: 'danger-full-access',
+            },
+          },
+        }
+      }
+
+      if (method === 'turn/start') {
+        expect(params).toMatchObject({
+          threadId: 'thread-execution-mode-turn-no-values-1',
+        })
+        return {
+          turn: { id: 'turn-execution-mode-no-values-1' },
+        }
+      }
+
+      throw new Error(`Unexpected method: ${method}`)
+    })
+
+    const { wrapper, bridge } = mountBridgeClientHarness()
+    await bridge.connect()
+    await flushPromises()
+
+    await bridge.loadConfig()
+    await flushPromises()
+    await bridge.startThread()
+    await flushPromises()
+
+    expect(bridge.executionModeCurrentPreset.value).toBe('dangerously-bypass')
+
+    bridge.messageInput.value = 'preserve execution mode'
+    await bridge.sendTurn()
+    await flushPromises()
+
+    expect(bridge.executionModeConfig.value).toEqual({
+      approvalPolicy: 'never',
+      sandboxMode: 'danger-full-access',
+    })
+    expect(bridge.executionModeCurrentPreset.value).toBe('dangerously-bypass')
+    expect(bridge.selectedExecutionModePreset.value).toBe('dangerously-bypass')
+
+    wrapper.unmount()
+  })
+
+  it('saves full-auto execution mode via config/batchWrite with expected payload', async () => {
+    let batchWriteCalled = false
+    bridgeMock.setRequestHandler(async (method) => {
+      if (method === 'initialize') {
+        return { userAgent: 'mock-codex-agent' }
+      }
+
+      if (method === 'config/read') {
+        return {
+          version: 'v-config-2',
+          result: {
+            values: {
+              approvalPolicy: 'on-request',
+              sandbox: 'workspace-write',
+            },
+          },
+        }
+      }
+
+      if (method === 'configRequirements/read') {
+        return {
+          allowedApprovalPolicies: ['on-request', 'never', 'untrusted'],
+          allowedSandboxModes: ['read-only', 'workspace-write', 'danger-full-access'],
+        }
+      }
+
+      if (method === 'config/batchWrite') {
+        batchWriteCalled = true
+        return {
+          version: 'v-config-3',
+          result: {
+            values: {
+              approvalPolicy: 'on-request',
+              sandbox: 'workspace-write',
+            },
+          },
+        }
+      }
+
+      throw new Error(`Unexpected method: ${method}`)
+    })
+
+    const wrapper = mount(App)
+    await connectAndInitialize(wrapper)
+    await getByTestId(wrapper, 'execution-mode-select').setValue('full-auto')
+    await flushPromises()
+    await getByTestId(wrapper, 'execution-mode-save-button').trigger('click')
+    await flushPromises()
+
+    const batchWriteCalls = bridgeMock
+      .getRequestCalls()
+      .filter((call) => call.method === 'config/batchWrite')
+    expect(batchWriteCalled).toBe(true)
+    expect(batchWriteCalls).toHaveLength(1)
+    expect(batchWriteCalls[0]?.params).toMatchObject({
+      reloadUserConfig: true,
+      edits: [
+        {
+          keyPath: 'approval_policy',
+          mergeStrategy: 'upsert',
+          value: 'on-request',
+        },
+        {
+          keyPath: 'sandbox_mode',
+          mergeStrategy: 'upsert',
+          value: 'workspace-write',
+        },
+      ],
+    })
+    expect((wrapper.get('select[data-testid="execution-mode-select"]').element as HTMLSelectElement).value).toBe('full-auto')
+    wrapper.unmount()
+  })
+
+  it('does not save dangerous execution mode without confirmation', async () => {
+    const confirmSpy = vi.spyOn(window, 'confirm').mockReturnValue(false)
+    bridgeMock.setRequestHandler(async (method) => {
+      if (method === 'initialize') {
+        return { userAgent: 'mock-codex-agent' }
+      }
+
+      if (method === 'config/read') {
+        return {
+          result: {
+            values: {
+              approvalPolicy: 'on-request',
+              sandbox: 'workspace-write',
+            },
+          },
+        }
+      }
+
+      if (method === 'configRequirements/read') {
+        return {
+          allowedApprovalPolicies: ['on-request', 'never'],
+          allowedSandboxModes: ['workspace-write', 'danger-full-access'],
+        }
+      }
+
+      throw new Error(`Unexpected method: ${method}`)
+    })
+
+    const wrapper = mount(App)
+    await connectAndInitialize(wrapper)
+    await openAdvancedPanel(wrapper)
+    await getByTestId(wrapper, 'load-config-button').trigger('click')
+    await flushPromises()
+
+    await getByTestId(wrapper, 'execution-mode-select').setValue('dangerously-bypass')
+    await flushPromises()
+    await getByTestId(wrapper, 'execution-mode-save-button').trigger('click')
+    await flushPromises()
+
+    expect(confirmSpy).toHaveBeenCalled()
+    const batchWriteCalls = bridgeMock.getRequestCalls().filter((call) => call.method === 'config/batchWrite')
+    expect(batchWriteCalls).toHaveLength(0)
+    confirmSpy.mockRestore()
+    wrapper.unmount()
+  })
+
+  it('saves dangerous execution mode after explicit confirmation', async () => {
+    const confirmSpy = vi.spyOn(window, 'confirm').mockReturnValue(true)
+    bridgeMock.setRequestHandler(async (method) => {
+      if (method === 'initialize') {
+        return { userAgent: 'mock-codex-agent' }
+      }
+
+      if (method === 'config/read') {
+        return {
+          version: 'v-config-5',
+          result: {
+            values: {
+              approvalPolicy: 'on-request',
+              sandbox: 'workspace-write',
+            },
+          },
+        }
+      }
+
+      if (method === 'configRequirements/read') {
+        return {
+          allowedApprovalPolicies: ['on-request', 'never'],
+          allowedSandboxModes: ['workspace-write', 'danger-full-access'],
+        }
+      }
+
+      if (method === 'config/batchWrite') {
+        return {
+          version: 'v-config-6',
+        }
+      }
+
+      throw new Error(`Unexpected method: ${method}`)
+    })
+
+    const wrapper = mount(App)
+    await connectAndInitialize(wrapper)
+    await openAdvancedPanel(wrapper)
+    await getByTestId(wrapper, 'load-config-button').trigger('click')
+    await flushPromises()
+
+    await getByTestId(wrapper, 'execution-mode-select').setValue('dangerously-bypass')
+    await flushPromises()
+    await getByTestId(wrapper, 'execution-mode-save-button').trigger('click')
+    await flushPromises()
+
+    expect(confirmSpy).toHaveBeenCalled()
+    const batchWriteCalls = bridgeMock.getRequestCalls().filter((call) => call.method === 'config/batchWrite')
+    expect(batchWriteCalls).toHaveLength(1)
+    expect(batchWriteCalls[0]?.params).toMatchObject({
+      reloadUserConfig: true,
+      edits: [
+        {
+          keyPath: 'approval_policy',
+          mergeStrategy: 'upsert',
+          value: 'never',
+        },
+        {
+          keyPath: 'sandbox_mode',
+          mergeStrategy: 'upsert',
+          value: 'danger-full-access',
+        },
+      ],
+    })
+
+    confirmSpy.mockRestore()
     wrapper.unmount()
   })
 

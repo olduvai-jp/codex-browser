@@ -1,9 +1,30 @@
 import { mount } from '@vue/test-utils'
-import { describe, expect, it } from 'vitest'
+import { describe, expect, it, vi } from 'vitest'
 
 import ChatComposer from './ChatComposer.vue'
+import type {
+  ExecutionModePreset,
+  ExecutionModeRequirements,
+  ReasoningEffort,
+} from '@/types'
 
-function mountComposer() {
+function mountComposer(overrides: Partial<{
+  modelValue: string
+  canSend: boolean
+  canInterrupt: boolean
+  sendHint: string
+  hintReady: boolean
+  disabled: boolean
+  settingsDisabled: boolean
+  modelOptions: Array<{ id: string; label: string }>
+  selectedModelId: string
+  selectedThinkingEffort: ReasoningEffort | ''
+  thinkingOptions: ReasoningEffort[]
+  currentExecutionModePreset: ExecutionModePreset
+  selectedExecutionModePreset: ExecutionModePreset
+  executionModeRequirements: ExecutionModeRequirements
+  executionModeSaving: boolean
+}> = {}) {
   return mount(ChatComposer, {
     props: {
       modelValue: 'テスト入力',
@@ -20,6 +41,14 @@ function mountComposer() {
       selectedModelId: '',
       selectedThinkingEffort: '',
       thinkingOptions: ['none', 'minimal', 'low', 'medium', 'high', 'xhigh'],
+      currentExecutionModePreset: 'default',
+      selectedExecutionModePreset: 'default',
+      executionModeRequirements: {
+        allowedApprovalPolicies: ['on-request', 'never', 'untrusted'],
+        allowedSandboxModes: ['read-only', 'workspace-write', 'danger-full-access'],
+      },
+      executionModeSaving: false,
+      ...overrides,
     },
   })
 }
@@ -50,6 +79,71 @@ describe('ChatComposer', () => {
 
     expect(wrapper.emitted('update:selectedModelId')).toEqual([['gpt-4o-mini']])
     expect(wrapper.emitted('update:selectedThinkingEffort')).toEqual([['high']])
+  })
+
+  it('emits execution mode selection and save action', async () => {
+    const wrapper = mountComposer()
+
+    await wrapper.get('select[data-testid="execution-mode-select"]').setValue('full-auto')
+    await wrapper.setProps({ selectedExecutionModePreset: 'full-auto' })
+    await wrapper.get('button[data-testid="execution-mode-save-button"]').trigger('click')
+
+    expect(wrapper.emitted('update:selectedExecutionModePreset')).toEqual([['full-auto']])
+    expect(wrapper.emitted('saveExecutionModeConfig')).toHaveLength(1)
+  })
+
+  it('requires confirmation before saving dangerously bypass execution mode', async () => {
+    const confirmSpy = vi.spyOn(window, 'confirm').mockReturnValue(false)
+    const wrapper = mountComposer()
+
+    await wrapper.get('select[data-testid="execution-mode-select"]').setValue('dangerously-bypass')
+    await wrapper.setProps({ selectedExecutionModePreset: 'dangerously-bypass' })
+    await wrapper.get('button[data-testid="execution-mode-save-button"]').trigger('click')
+
+    expect(wrapper.emitted('update:selectedExecutionModePreset')).toEqual([['dangerously-bypass']])
+    expect(confirmSpy).toHaveBeenCalled()
+    expect(wrapper.emitted('saveExecutionModeConfig')).toBeUndefined()
+
+    confirmSpy.mockRestore()
+  })
+
+  it('emits save after confirming dangerous execution mode', async () => {
+    const confirmSpy = vi.spyOn(window, 'confirm').mockReturnValue(true)
+    const wrapper = mountComposer()
+
+    await wrapper.get('select[data-testid="execution-mode-select"]').setValue('dangerously-bypass')
+    await wrapper.setProps({ selectedExecutionModePreset: 'dangerously-bypass' })
+    await wrapper.get('button[data-testid="execution-mode-save-button"]').trigger('click')
+
+    expect(wrapper.emitted('update:selectedExecutionModePreset')).toEqual([['dangerously-bypass']])
+    expect(wrapper.emitted('saveExecutionModeConfig')).toHaveLength(1)
+    expect(confirmSpy).toHaveBeenCalled()
+
+    confirmSpy.mockRestore()
+  })
+
+  it('disables dangerous preset when requirements are restricted', async () => {
+    const wrapper = mountComposer({
+      executionModeRequirements: {
+        allowedApprovalPolicies: ['on-request'],
+        allowedSandboxModes: ['read-only', 'workspace-write'],
+      },
+    })
+
+    const dangerOption = wrapper
+      .get('select[data-testid="execution-mode-select"]')
+      .find('option[value="dangerously-bypass"]')
+    expect(dangerOption.attributes('disabled')).toBeDefined()
+  })
+
+  it('shows current preset label and disables save for display-only states', async () => {
+    const wrapper = mountComposer({
+      currentExecutionModePreset: 'custom',
+      selectedExecutionModePreset: 'custom',
+    })
+
+    expect(wrapper.get('[data-testid="execution-mode-current-label"]').text()).toContain('現在: custom')
+    expect(wrapper.get('[data-testid="execution-mode-save-button"]').attributes('disabled')).toBeDefined()
   })
 
 })

@@ -1,8 +1,258 @@
-import { REASONING_EFFORT_VALUES, type JsonRpcId, type ModelOption, type ReasoningEffort, type ThreadHistoryEntry } from '@/types'
+import {
+  APPROVAL_POLICY_VALUES,
+  EXECUTION_MODE_PRESET_VALUES,
+  type ApprovalPolicy,
+  REASONING_EFFORT_VALUES,
+  SANDBOX_MODE_VALUES,
+  type SandboxMode,
+  type JsonRpcId,
+  type ModelOption,
+  type ReasoningEffort,
+  type ThreadHistoryEntry,
+  type ExecutionModeRequirements,
+  type ExecutionModePreset,
+  type ExecutionModePresetPair,
+} from '@/types'
 
 const REASONING_EFFORT_SET = new Set<string>(REASONING_EFFORT_VALUES)
+const APPROVAL_POLICY_SET = new Set<string>(APPROVAL_POLICY_VALUES)
+const SANDBOX_MODE_SET = new Set<string>(SANDBOX_MODE_VALUES)
 const THREAD_TITLE_CANDIDATE_KEYS = ['title', 'name', 'summary', 'preview']
+const PRESET_VALUES = new Set<string>(EXECUTION_MODE_PRESET_VALUES)
 const UUID_STRING_PATTERN = /^(?:[0-9a-f]{32}|[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})$/i
+const EXECUTION_MODE_APPROVAL_POLICY_KEYS = [
+  'approval_policy',
+  'approvalPolicy',
+  'approval-policy',
+  'approval',
+] as const
+const EXECUTION_MODE_SANDBOX_MODE_KEYS = [
+  'sandbox_mode',
+  'sandboxMode',
+  'sandbox-mode',
+  'sandbox',
+] as const
+const EXECUTION_MODE_REQUIREMENT_APPROVAL_KEYS = [
+  'allowedApprovalPolicies',
+  'allowed_approval_policies',
+  'allowedApprovalPolicy',
+  'allowed_approval_policy',
+] as const
+const EXECUTION_MODE_REQUIREMENT_SANDBOX_KEYS = [
+  'allowedSandboxModes',
+  'allowed_sandbox_modes',
+  'allowedSandboxMode',
+  'allowed_sandbox_mode',
+] as const
+const DEFAULT_EXECUTION_MODE_REQUIREMENTS: ExecutionModeRequirements = {
+  allowedApprovalPolicies: ['on-request'],
+  allowedSandboxModes: ['workspace-write'],
+}
+
+function normalizeRecordList(value: unknown): Record<string, unknown>[] {
+  const records: Record<string, unknown>[] = []
+  if (!isRecord(value)) {
+    return records
+  }
+  records.push(value)
+  if (isRecord(value.result)) {
+    records.push(value.result)
+  }
+  if (isRecord(value.config)) {
+    records.push(value.config)
+  }
+  if (isRecord(value.values)) {
+    records.push(value.values)
+  }
+  if (isRecord(value.data)) {
+    records.push(value.data)
+  }
+  return records
+}
+
+function pickStringArrayValue(source: Record<string, unknown>, keys: string[]): string[] {
+  for (const key of keys) {
+    const value = source[key]
+    if (!Array.isArray(value)) {
+      continue
+    }
+
+    const nextValues = value
+      .filter((entry): entry is string => typeof entry === 'string')
+      .map((entry) => entry.trim())
+      .filter((entry): entry is string => entry.length > 0)
+    if (nextValues.length > 0) {
+      return nextValues
+    }
+  }
+
+  return []
+}
+
+function findValueByKeys(
+  source: Record<string, unknown>,
+  keys: readonly string[],
+): {
+  hasKey: boolean
+  value: string | null
+} {
+  for (const key of keys) {
+    if (!hasOwn(source, key)) {
+      continue
+    }
+
+    const rawValue = source[key]
+    if (typeof rawValue === 'string') {
+      const normalizedValue = rawValue.trim()
+      return {
+        hasKey: true,
+        value: normalizedValue.length > 0 ? normalizedValue : null,
+      }
+    }
+
+    if (typeof rawValue === 'number' && Number.isFinite(rawValue)) {
+      return {
+        hasKey: true,
+        value: String(rawValue),
+      }
+    }
+
+    return {
+      hasKey: true,
+      value: null,
+    }
+  }
+
+  return {
+    hasKey: false,
+    value: null,
+  }
+}
+
+export function normalizeExecutionModeFromConfigPayload(payload: unknown): ExecutionModePresetPair {
+  const records = normalizeRecordList(payload)
+  let incompletePair: ExecutionModePresetPair | null = null
+
+  for (const record of records) {
+    const candidates: Record<string, unknown>[] = [record]
+    if (isRecord(record.result)) {
+      candidates.push(record.result)
+      if (isRecord(record.result.values)) {
+        candidates.push(record.result.values)
+      }
+      if (isRecord(record.result.config)) {
+        candidates.push(record.result.config)
+      }
+    }
+    if (isRecord(record.config)) {
+      candidates.push(record.config)
+    }
+    if (isRecord(record.values)) {
+      candidates.push(record.values)
+    }
+    if (isRecord(record.data)) {
+      candidates.push(record.data)
+    }
+
+    for (const candidate of candidates) {
+      const approvalValue = findValueByKeys(candidate, EXECUTION_MODE_APPROVAL_POLICY_KEYS)
+      const sandboxValue = findValueByKeys(candidate, EXECUTION_MODE_SANDBOX_MODE_KEYS)
+
+      if (!approvalValue.hasKey && !sandboxValue.hasKey) {
+        continue
+      }
+
+      const approvalPolicy =
+        approvalValue.value && APPROVAL_POLICY_SET.has(approvalValue.value)
+          ? (approvalValue.value as ApprovalPolicy)
+          : null
+      const sandboxMode =
+        sandboxValue.value && SANDBOX_MODE_SET.has(sandboxValue.value)
+          ? (sandboxValue.value as SandboxMode)
+          : null
+
+      if (approvalPolicy && sandboxMode) {
+        return {
+          approvalPolicy,
+          sandboxMode,
+          hasExecutionModeValues: true,
+          isComplete: true,
+        }
+      }
+
+      incompletePair ??= {
+        approvalPolicy,
+        sandboxMode,
+        hasExecutionModeValues: true,
+        isComplete: false,
+      }
+    }
+  }
+
+  return (
+    incompletePair ?? {
+      approvalPolicy: null,
+      sandboxMode: null,
+      hasExecutionModeValues: false,
+      isComplete: false,
+    }
+  )
+}
+
+export function normalizeExecutionModeRequirements(payload: unknown): ExecutionModeRequirements {
+  const records = normalizeRecordList(payload)
+
+  for (const record of records) {
+    if (
+      (hasOwn(record, 'requirements') && record.requirements === null) ||
+      (hasOwn(record, 'configRequirements') && record.configRequirements === null)
+    ) {
+      return {
+        allowedApprovalPolicies: [...APPROVAL_POLICY_VALUES],
+        allowedSandboxModes: [...SANDBOX_MODE_VALUES],
+      }
+    }
+  }
+
+  let allowedApprovalPolicies: ApprovalPolicy[] | null = null
+  let allowedSandboxModes: SandboxMode[] | null = null
+
+  for (const record of records) {
+    const requirements =
+      (isRecord(record.requirements)
+        ? record.requirements
+        : isRecord(record.configRequirements)
+          ? record.configRequirements
+          : null) ?? null
+
+    const source = requirements ?? record
+    const hasApprovalRequirements = EXECUTION_MODE_REQUIREMENT_APPROVAL_KEYS.some((key) => hasOwn(source, key))
+    const hasSandboxRequirements = EXECUTION_MODE_REQUIREMENT_SANDBOX_KEYS.some((key) => hasOwn(source, key))
+    const approvalPolicies = pickStringArrayValue(source, [...EXECUTION_MODE_REQUIREMENT_APPROVAL_KEYS]).filter(
+      (value): value is ApprovalPolicy => APPROVAL_POLICY_SET.has(value),
+    )
+    const sandboxModes = pickStringArrayValue(source, [...EXECUTION_MODE_REQUIREMENT_SANDBOX_KEYS]).filter(
+      (value): value is SandboxMode => SANDBOX_MODE_SET.has(value),
+    )
+
+    if (hasApprovalRequirements && approvalPolicies.length > 0) {
+      allowedApprovalPolicies = [...new Set(approvalPolicies)]
+    }
+    if (hasSandboxRequirements && sandboxModes.length > 0) {
+      allowedSandboxModes = [...new Set(sandboxModes)]
+    }
+  }
+
+  return {
+    allowedApprovalPolicies:
+      allowedApprovalPolicies ?? [...DEFAULT_EXECUTION_MODE_REQUIREMENTS.allowedApprovalPolicies],
+    allowedSandboxModes: allowedSandboxModes ?? [...DEFAULT_EXECUTION_MODE_REQUIREMENTS.allowedSandboxModes],
+  }
+}
+
+export function isExecutionModePreset(value: string): value is ExecutionModePreset {
+  return PRESET_VALUES.has(value)
+}
 
 export function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null

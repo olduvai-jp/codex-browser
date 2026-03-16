@@ -10,13 +10,17 @@ const bridgeMock = vi.hoisted(() => {
   type RequestHandler = (method: string, params: unknown) => unknown | Promise<unknown>
 
   let requestHandler: RequestHandler = async () => ({})
+  const requestCalls: Array<{ method: string; params: unknown }> = []
 
   class MockBridgeRpcClient {
     static instances: MockBridgeRpcClient[] = []
 
     connect = vi.fn(async (_url: string) => {})
     disconnect = vi.fn(() => {})
-    request = vi.fn(async (method: string, params: unknown) => requestHandler(method, params))
+    request = vi.fn(async (method: string, params: unknown) => {
+      requestCalls.push({ method, params })
+      return requestHandler(method, params)
+    })
     send = vi.fn((_message: unknown) => {})
     respond = vi.fn((_id: number | string, _result: unknown) => {})
 
@@ -26,6 +30,10 @@ const bridgeMock = vi.hoisted(() => {
     ) {
       MockBridgeRpcClient.instances.push(this)
     }
+
+    emitMessage(message: unknown): void {
+      this._onMessage(message)
+    }
   }
 
   return {
@@ -33,8 +41,12 @@ const bridgeMock = vi.hoisted(() => {
     setRequestHandler(handler: RequestHandler): void {
       requestHandler = handler
     },
+    getRequestCalls(): Array<{ method: string; params: unknown }> {
+      return [...requestCalls]
+    },
     reset(): void {
       requestHandler = async () => ({})
+      requestCalls.length = 0
       MockBridgeRpcClient.instances = []
     },
   }
@@ -56,6 +68,15 @@ type BridgeClientVm = {
   selectedThinkingEffort: ReasoningEffort | ''
   setSelectedModelId: (value: string) => void
   setSelectedThinkingEffort: (value: string) => void
+}
+
+function getClientInstance(): InstanceType<typeof bridgeMock.MockBridgeRpcClient> {
+  const client = bridgeMock.MockBridgeRpcClient.instances[0]
+  if (!client) {
+    throw new Error('Expected mock BridgeRpcClient instance to exist')
+  }
+
+  return client
 }
 
 describe('useBridgeClient connect', () => {
@@ -208,5 +229,515 @@ describe('useBridgeClient sendTurn', () => {
     expect(vm.threadHistory[0]?.title).toBe('thread-send-fail-title-1')
 
     wrapper.unmount()
+  })
+
+  it('uses cwd-scoped explicit params for history load by default and supports show-all pagination', async () => {
+    bridgeMock.setRequestHandler(async (method, params) => {
+      if (method === 'initialize') {
+        return { userAgent: 'mock-codex-agent' }
+      }
+      if (method === 'thread/list') {
+        const request = params as Record<string, unknown>
+        if (request.cursor === 'cursor-2') {
+          return {
+            threads: [
+              {
+                id: 'thread-current-2',
+                title: 'Current 2',
+                cwd: '/workspace/current',
+                updatedAt: '2026-03-15T11:00:00.000Z',
+              },
+            ],
+            nextCursor: null,
+          }
+        }
+
+        if (request.cwd === '/workspace/current') {
+          return {
+            threads: [
+              {
+                id: 'thread-current-1',
+                title: 'Current 1',
+                cwd: '/workspace/current',
+                updatedAt: '2026-03-15T12:00:00.000Z',
+              },
+            ],
+            nextCursor: 'cursor-2',
+          }
+        }
+
+        return {
+          threads: [
+            {
+              id: 'thread-current-1',
+              title: 'Current 1',
+              cwd: '/workspace/current',
+              updatedAt: '2026-03-15T12:00:00.000Z',
+            },
+            {
+              id: 'thread-other-1',
+              title: 'Other 1',
+              cwd: '/workspace/other',
+              updatedAt: '2026-03-14T12:00:00.000Z',
+            },
+          ],
+          nextCursor: null,
+        }
+      }
+      throw new Error(`Unexpected method: ${method}`)
+    })
+
+    const wrapper = mount(HostComponent)
+    const vm = wrapper.vm as unknown as {
+      connect: () => Promise<void>
+      loadThreadHistory: () => Promise<void>
+      loadMoreThreadHistory: () => Promise<void>
+      toggleHistoryScope: () => Promise<void>
+      threadHistory: Array<{ id: string }>
+      historyCanLoadMore: boolean
+    }
+
+    await vm.connect()
+    await flushPromises()
+
+    getClientInstance().emitMessage({
+      type: 'bridge/status',
+      payload: {
+        event: 'bridge-started',
+        details: {
+          cwd: '/workspace/current',
+        },
+      },
+    })
+    await flushPromises()
+
+    await vm.loadThreadHistory()
+    await flushPromises()
+
+    const threadListCalls = bridgeMock.getRequestCalls().filter((call) => call.method === 'thread/list')
+    expect(threadListCalls[0]?.params).toEqual({
+      limit: 25,
+      sortKey: 'updated_at',
+      archived: false,
+      sourceKinds: [],
+      cwd: '/workspace/current',
+    })
+    expect(vm.threadHistory.map((entry) => entry.id)).toEqual(['thread-current-1'])
+    expect(vm.historyCanLoadMore).toBe(true)
+
+    await vm.loadMoreThreadHistory()
+    await flushPromises()
+
+    const secondThreadListCall = bridgeMock
+      .getRequestCalls()
+      .filter((call) => call.method === 'thread/list')[1]
+    expect(secondThreadListCall?.params).toEqual({
+      limit: 25,
+      sortKey: 'updated_at',
+      archived: false,
+      sourceKinds: [],
+      cwd: '/workspace/current',
+      cursor: 'cursor-2',
+    })
+    expect(vm.threadHistory.map((entry) => entry.id)).toEqual(['thread-current-1', 'thread-current-2'])
+
+    await vm.toggleHistoryScope()
+    await flushPromises()
+
+    const thirdThreadListCall = bridgeMock
+      .getRequestCalls()
+      .filter((call) => call.method === 'thread/list')[2]
+    expect(thirdThreadListCall?.params).toEqual({
+      limit: 25,
+      sortKey: 'updated_at',
+      archived: false,
+      sourceKinds: [],
+    })
+    expect(vm.threadHistory.map((entry) => entry.id)).toEqual(['thread-current-1', 'thread-other-1'])
+
+    wrapper.unmount()
+  })
+})
+
+describe('useBridgeClient quickStartConversation', () => {
+  beforeEach(() => {
+    bridgeMock.reset()
+  })
+
+  it('waits for bridge cwd before loading scoped history for auto resume', async () => {
+    bridgeMock.setRequestHandler(async (method, params) => {
+      if (method === 'initialize') {
+        queueMicrotask(() => {
+          getClientInstance().emitMessage({
+            type: 'bridge/status',
+            payload: {
+              event: 'bridge-started',
+              details: {
+                cwd: '/workspace/current',
+              },
+            },
+          })
+        })
+        return { userAgent: 'mock-codex-agent' }
+      }
+
+      if (method === 'model/list') {
+        return { models: [] }
+      }
+
+      if (method === 'thread/list') {
+        const request = params as Record<string, unknown>
+        if (request.cwd === '/workspace/current') {
+          return {
+            threads: [
+              {
+                id: 'thread-current',
+                title: 'Current workspace thread',
+                cwd: '/workspace/current',
+                updatedAt: '2026-03-15T12:00:00.000Z',
+              },
+            ],
+          }
+        }
+
+        return {
+          threads: [
+            {
+              id: 'thread-other',
+              title: 'Other workspace thread',
+              cwd: '/workspace/other',
+              updatedAt: '2026-03-15T13:00:00.000Z',
+            },
+          ],
+        }
+      }
+
+      if (method === 'thread/resume') {
+        const request = params as { threadId?: string }
+        return {
+          thread: {
+            id: request.threadId ?? '',
+            turns: [
+              {
+                id: 'turn-resume-1',
+                items: [
+                  {
+                    type: 'userMessage',
+                    content: [
+                      {
+                        type: 'text',
+                        text: `resumed ${request.threadId ?? ''}`,
+                      },
+                    ],
+                  },
+                ],
+              },
+            ],
+          },
+        }
+      }
+
+      if (method === 'config/read') {
+        return {
+          version: 'config-quick-start-1',
+          result: {
+            values: {},
+          },
+        }
+      }
+
+      if (method === 'configRequirements/read') {
+        return {
+          requirements: {
+            allowedApprovalPolicies: ['on-request'],
+            allowedSandboxModes: ['workspace-write'],
+          },
+        }
+      }
+
+      throw new Error(`Unexpected method: ${method}`)
+    })
+
+    const wrapper = mount(HostComponent)
+    const vm = wrapper.vm as unknown as {
+      quickStartConversation: () => Promise<void>
+      activeThreadId: string
+      threadHistory: Array<{ id: string }>
+    }
+
+    await vm.quickStartConversation()
+    await flushPromises()
+
+    const threadListCall = bridgeMock.getRequestCalls().find((call) => call.method === 'thread/list')
+    expect(threadListCall?.params).toEqual({
+      limit: 25,
+      sortKey: 'updated_at',
+      archived: false,
+      sourceKinds: [],
+      cwd: '/workspace/current',
+    })
+    expect(
+      bridgeMock.getRequestCalls().find((call) => call.method === 'thread/resume')?.params,
+    ).toEqual({
+      threadId: 'thread-current',
+    })
+    expect(vm.activeThreadId).toBe('thread-current')
+    expect(vm.threadHistory.map((entry) => entry.id)).toEqual(['thread-current'])
+
+    wrapper.unmount()
+  })
+
+  it('starts a new thread with the current cwd when scoped history is empty', async () => {
+    bridgeMock.setRequestHandler(async (method, params) => {
+      if (method === 'initialize') {
+        queueMicrotask(() => {
+          getClientInstance().emitMessage({
+            type: 'bridge/status',
+            payload: {
+              event: 'bridge-started',
+              details: {
+                cwd: '/workspace/current',
+              },
+            },
+          })
+        })
+        return { userAgent: 'mock-codex-agent' }
+      }
+
+      if (method === 'model/list') {
+        return { models: [] }
+      }
+
+      if (method === 'thread/list') {
+        expect(params).toEqual({
+          limit: 25,
+          sortKey: 'updated_at',
+          archived: false,
+          sourceKinds: [],
+          cwd: '/workspace/current',
+        })
+        return { threads: [] }
+      }
+
+      if (method === 'thread/start') {
+        expect(params).toEqual({
+          experimentalRawEvents: false,
+          cwd: '/workspace/current',
+        })
+        return {
+          thread: {
+            id: 'thread-new-current',
+          },
+        }
+      }
+
+      if (method === 'config/read') {
+        return {
+          version: 'config-quick-start-empty-1',
+          result: {
+            values: {},
+          },
+        }
+      }
+
+      if (method === 'configRequirements/read') {
+        return {
+          requirements: {
+            allowedApprovalPolicies: ['on-request'],
+            allowedSandboxModes: ['workspace-write'],
+          },
+        }
+      }
+
+      throw new Error(`Unexpected method: ${method}`)
+    })
+
+    const wrapper = mount(HostComponent)
+    const vm = wrapper.vm as unknown as {
+      quickStartConversation: () => Promise<void>
+      activeThreadId: string
+      threadHistory: Array<{ id: string }>
+    }
+
+    await vm.quickStartConversation()
+    await flushPromises()
+
+    expect(
+      bridgeMock.getRequestCalls().find((call) => call.method === 'thread/start')?.params,
+    ).toEqual({
+      experimentalRawEvents: false,
+      cwd: '/workspace/current',
+    })
+    expect(vm.activeThreadId).toBe('thread-new-current')
+    expect(vm.threadHistory).toEqual([])
+
+    wrapper.unmount()
+  })
+
+  it('recovers delayed bridge cwd before resuming the latest scoped thread', async () => {
+    vi.useFakeTimers()
+
+    try {
+      bridgeMock.setRequestHandler(async (method, params) => {
+        if (method === 'initialize') {
+          window.setTimeout(() => {
+            getClientInstance().emitMessage({
+              type: 'bridge/status',
+              payload: {
+                event: 'bridge-started',
+                details: {
+                  cwd: '/workspace/current',
+                },
+              },
+            })
+          }, 200)
+          return { userAgent: 'mock-codex-agent' }
+        }
+
+        if (method === 'model/list') {
+          return { models: [] }
+        }
+
+        if (method === 'thread/list') {
+          expect(params).toEqual({
+            limit: 25,
+            sortKey: 'updated_at',
+            archived: false,
+            sourceKinds: [],
+            cwd: '/workspace/current',
+          })
+          return {
+            threads: [
+              {
+                id: 'thread-delayed-current-newest',
+                title: 'Delayed current workspace newest thread',
+                cwd: '/workspace/current',
+                updatedAt: '2026-03-15T12:30:00.000Z',
+              },
+              {
+                id: 'thread-delayed-current-older',
+                title: 'Delayed current workspace older thread',
+                cwd: '/workspace/current',
+                updatedAt: '2026-03-15T12:00:00.000Z',
+              },
+            ],
+          }
+        }
+
+        if (method === 'thread/resume') {
+          expect(params).toEqual({
+            threadId: 'thread-delayed-current-newest',
+          })
+          return {
+            thread: {
+              id: 'thread-delayed-current-newest',
+              turns: [
+                {
+                  id: 'turn-delayed-1',
+                  items: [
+                    {
+                      type: 'userMessage',
+                      content: [
+                        {
+                          type: 'text',
+                          text: 'Recovered delayed workspace history',
+                        },
+                      ],
+                    },
+                  ],
+                },
+              ],
+            },
+          }
+        }
+
+        if (method === 'config/read') {
+          return {
+            version: 'config-quick-start-delayed-1',
+            result: {
+              values: {},
+            },
+          }
+        }
+
+        if (method === 'configRequirements/read') {
+          return {
+            requirements: {
+              allowedApprovalPolicies: ['on-request'],
+              allowedSandboxModes: ['workspace-write'],
+            },
+          }
+        }
+
+        throw new Error(`Unexpected method: ${method}`)
+      })
+
+      const wrapper = mount(HostComponent)
+      const vm = wrapper.vm as unknown as {
+        quickStartConversation: () => Promise<void>
+        activeThreadId: string
+      }
+
+      const quickStartPromise = vm.quickStartConversation()
+      await flushPromises()
+      await vi.advanceTimersByTimeAsync(200)
+      await quickStartPromise
+      await flushPromises()
+
+      expect(
+        bridgeMock.getRequestCalls().find((call) => call.method === 'thread/start'),
+      ).toBeUndefined()
+      expect(
+        bridgeMock.getRequestCalls().find((call) => call.method === 'thread/resume')?.params,
+      ).toEqual({
+        threadId: 'thread-delayed-current-newest',
+      })
+      expect(vm.activeThreadId).toBe('thread-delayed-current-newest')
+
+      wrapper.unmount()
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  it('fails safe when quick start cannot determine cwd for scoped history', async () => {
+    vi.useFakeTimers()
+
+    try {
+      bridgeMock.setRequestHandler(async (method) => {
+        if (method === 'initialize') {
+          return { userAgent: 'mock-codex-agent' }
+        }
+
+        if (method === 'model/list') {
+          return { models: [] }
+        }
+
+        throw new Error(`Unexpected method: ${method}`)
+      })
+
+      const wrapper = mount(HostComponent)
+      const vm = wrapper.vm as unknown as {
+        quickStartConversation: () => Promise<void>
+        activeThreadId: string
+        userGuidance: { text: string } | null
+      }
+
+      const quickStartPromise = vm.quickStartConversation()
+      await flushPromises()
+      await vi.advanceTimersByTimeAsync(1_200)
+      await quickStartPromise
+      await flushPromises()
+
+      expect(vm.activeThreadId).toBe('')
+      expect(vm.userGuidance?.text).toContain('現在の workspace を特定できないため、自動で会話を開始しませんでした')
+      expect(bridgeMock.getRequestCalls().find((call) => call.method === 'thread/list')).toBeUndefined()
+      expect(bridgeMock.getRequestCalls().find((call) => call.method === 'thread/resume')).toBeUndefined()
+      expect(bridgeMock.getRequestCalls().find((call) => call.method === 'thread/start')).toBeUndefined()
+
+      wrapper.unmount()
+    } finally {
+      vi.useRealTimers()
+    }
   })
 })

@@ -9,6 +9,9 @@ const props = defineProps<{
   selectedThreadId: string
   activeThreadId: string
   canRefresh: boolean
+  historyShowAll: boolean
+  historyLoading: boolean
+  canLoadMoreHistory: boolean
   isTurnActive: boolean
   advancedPanelOpen: boolean
   isConnected: boolean
@@ -17,6 +20,8 @@ const props = defineProps<{
 
 const emit = defineEmits<{
   refresh: []
+  'toggle-history-scope': []
+  'load-more-history': []
   'open-thread': [threadId: string]
   'new-thread': []
   'new-thread-in-workspace': [cwd: string]
@@ -157,6 +162,15 @@ watch(
       <button
         type="button"
         class="rounded-md px-2 py-1 text-[11px] font-medium transition-colors"
+        data-testid="history-scope-toggle-button"
+        :class="props.historyShowAll ? 'bg-sidebar-hover text-text-primary' : 'text-text-muted hover:text-text-secondary'"
+        @click="emit('toggle-history-scope')"
+      >
+        {{ props.historyShowAll ? 'このWSのみ' : 'すべて表示' }}
+      </button>
+      <button
+        type="button"
+        class="rounded-md px-2 py-1 text-[11px] font-medium transition-colors"
         :class="viewMode === 'flat' ? 'bg-sidebar-hover text-text-primary' : 'text-text-muted hover:text-text-secondary'"
         @click="viewMode = 'flat'"
       >
@@ -265,6 +279,18 @@ watch(
           </div>
         </section>
       </template>
+    </div>
+
+    <div class="px-3 pb-3">
+      <button
+        type="button"
+        class="w-full rounded-lg border border-border-default px-3 py-2 text-xs font-medium transition-colors disabled:cursor-not-allowed disabled:opacity-40"
+        data-testid="history-load-more-button"
+        :disabled="!canLoadMoreHistory"
+        @click="emit('load-more-history')"
+      >
+        {{ historyLoading ? '読み込み中...' : 'さらに読み込む' }}
+      </button>
     </div>
 
     <!-- Footer -->

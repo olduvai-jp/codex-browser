@@ -27,6 +27,8 @@ const {
   selectedThinkingEffort,
   configSnapshot,
   userGuidance,
+  historyShowAll,
+  historyLoading,
   logs,
   toolCalls,
   executionModeCurrentPreset,
@@ -47,6 +49,7 @@ const {
   canResumeThread,
   canSendMessage,
   canInterruptTurn,
+  historyCanLoadMore,
   currentToolUserInputRequest,
   currentApproval,
   sendStateHint,
@@ -62,6 +65,7 @@ const {
   startThread,
   listDirectories,
   loadThreadHistory,
+  loadMoreThreadHistory,
   resumeThread,
   sendTurn,
   interruptTurn,
@@ -69,6 +73,7 @@ const {
   setSelectedThinkingEffort,
   setSelectedExecutionModePreset,
   saveExecutionModeConfig,
+  toggleHistoryScope,
   loadConfig,
   respondToToolUserInput,
   cancelToolUserInputRequest,
@@ -109,11 +114,16 @@ onMounted(() => {
         :selected-thread-id="selectedHistoryThreadId"
         :active-thread-id="activeThreadId"
         :can-refresh="isConnected && initialized"
+        :history-show-all="historyShowAll"
+        :history-loading="historyLoading"
+        :can-load-more-history="historyCanLoadMore"
         :is-turn-active="isTurnActive"
         :advanced-panel-open="advancedPanelOpen"
         :is-connected="isConnected"
         :connection-state="connectionState"
         @refresh="loadThreadHistory"
+        @toggle-history-scope="toggleHistoryScope"
+        @load-more-history="loadMoreThreadHistory"
         @open-thread="resumeThread($event)"
         @new-thread="startThread()"
         @new-thread-in-workspace="startThread($event)"

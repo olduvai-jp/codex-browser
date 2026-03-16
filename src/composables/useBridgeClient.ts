@@ -1,4 +1,4 @@
-import { computed, onBeforeUnmount, ref } from 'vue'
+import { computed, onBeforeUnmount, ref, watch } from 'vue'
 
 import { BridgeRpcClient, type JsonRpcId } from '@/lib/bridgeRpcClient'
 import {
@@ -58,6 +58,9 @@ import type {
 
 const DEFAULT_WS_URL = 'ws://127.0.0.1:8787/bridge'
 const MAX_THREADS_PER_WORKSPACE_GROUP = 50
+const HISTORY_PAGE_SIZE = 25
+const QUICK_START_CWD_WAIT_MS = 150
+const QUICK_START_CWD_RECOVERY_WAIT_MS = 1000
 const MAX_TOOL_CALL_ENTRIES = 100
 const MAX_TOOL_CALL_EVENTS = 40
 const REASONING_EFFORT_SET = new Set<string>(REASONING_EFFORT_VALUES)
@@ -354,6 +357,61 @@ function applyThreadHistoryTitleOverrides(
   })
 }
 
+function mergeThreadHistoryPages(
+  existingEntries: ThreadHistoryEntry[],
+  incomingEntries: ThreadHistoryEntry[],
+): ThreadHistoryEntry[] {
+  const mergedEntries = [...existingEntries]
+  const entryIndexById = new Map<string, number>()
+
+  for (let index = 0; index < mergedEntries.length; index += 1) {
+    const entry = mergedEntries[index]
+    if (!entry) {
+      continue
+    }
+    entryIndexById.set(entry.id, index)
+  }
+
+  for (const entry of incomingEntries) {
+    const existingIndex = entryIndexById.get(entry.id)
+    if (existingIndex == null) {
+      entryIndexById.set(entry.id, mergedEntries.length)
+      mergedEntries.push(entry)
+      continue
+    }
+    mergedEntries[existingIndex] = entry
+  }
+
+  return mergedEntries
+}
+
+function extractThreadHistoryNextCursor(payload: unknown): string | null {
+  if (!isRecord(payload)) {
+    return null
+  }
+
+  const directCursor = pickStringValue(payload, ['nextCursor', 'next_cursor'])
+  if (directCursor) {
+    return directCursor
+  }
+
+  if (isRecord(payload.result)) {
+    const resultCursor = pickStringValue(payload.result, ['nextCursor', 'next_cursor'])
+    if (resultCursor) {
+      return resultCursor
+    }
+  }
+
+  if (isRecord(payload.data)) {
+    const dataCursor = pickStringValue(payload.data, ['nextCursor', 'next_cursor'])
+    if (dataCursor) {
+      return dataCursor
+    }
+  }
+
+  return null
+}
+
 function resolveWorkspaceKeyForThread(entry: ThreadHistoryEntry): string {
   const normalizedCwd = entry.cwd?.trim() ?? ''
   return normalizedCwd.length > 0 ? normalizedCwd : UNKNOWN_WORKSPACE_LABEL
@@ -474,6 +532,9 @@ export function useBridgeClient() {
   const quickStartInProgress = ref(false)
   const userGuidance = ref<UserGuidance | null>(null)
   const bridgeCwd = ref('')
+  const historyShowAll = ref(false)
+  const historyNextCursor = ref('')
+  const historyLoading = ref(false)
   const historyTitleOverridesByThreadId = ref<Record<string, string>>({})
 
   const messages = ref<UiMessage[]>([])
@@ -609,6 +670,13 @@ export function useBridgeClient() {
   const canQuickStartConversation = computed(
     () => connectionState.value !== 'connecting' && !quickStartInProgress.value && !isTurnActive.value,
   )
+  const historyCanLoadMore = computed(
+    () =>
+      isConnected.value &&
+      initialized.value &&
+      !historyLoading.value &&
+      historyNextCursor.value.trim().length > 0,
+  )
   const workspaceHistoryGroups = computed<WorkspaceHistoryGroup[]>(() =>
     groupThreadHistoryByWorkspace(threadHistory.value, bridgeCwd.value),
   )
@@ -735,6 +803,75 @@ export function useBridgeClient() {
 
   function clearUserGuidance(): void {
     userGuidance.value = null
+  }
+
+  function buildThreadListParams(cursor?: string | null): Record<string, unknown> {
+    const params: Record<string, unknown> = {
+      limit: HISTORY_PAGE_SIZE,
+      sortKey: 'updated_at',
+      archived: false,
+      sourceKinds: [],
+    }
+    const normalizedCursor = cursor?.trim() ?? ''
+    if (normalizedCursor.length > 0) {
+      params.cursor = normalizedCursor
+    }
+    const resolvedCwd = bridgeCwd.value.trim()
+    if (!historyShowAll.value && resolvedCwd.length > 0) {
+      params.cwd = resolvedCwd
+    }
+
+    return params
+  }
+
+  async function waitForBridgeCwd(timeoutMs: number): Promise<string | null> {
+    const resolvedCwd = bridgeCwd.value.trim()
+    if (resolvedCwd.length > 0) {
+      return resolvedCwd
+    }
+
+    return await new Promise<string | null>((resolve) => {
+      let settled = false
+      const timeoutId = window.setTimeout(() => {
+        finish(null)
+      }, timeoutMs)
+      const stopWatching = watch(bridgeCwd, (value) => {
+        const nextCwd = value.trim()
+        if (nextCwd.length > 0) {
+          finish(nextCwd)
+        }
+      })
+
+      function finish(result: string | null): void {
+        if (settled) {
+          return
+        }
+
+        settled = true
+        window.clearTimeout(timeoutId)
+        stopWatching()
+        resolve(result)
+      }
+    })
+  }
+
+  async function waitForQuickStartHistoryScope(): Promise<string | null> {
+    if (historyShowAll.value) {
+      return ''
+    }
+
+    const fastPathCwd = await waitForBridgeCwd(QUICK_START_CWD_WAIT_MS)
+    if (fastPathCwd) {
+      return fastPathCwd
+    }
+
+    pushLog('rpc', 'info', 'Quick start awaiting late bridge cwd before scoped history resume.', {
+      waitMs: QUICK_START_CWD_WAIT_MS,
+      recoveryWaitMs: QUICK_START_CWD_RECOVERY_WAIT_MS,
+      showAll: historyShowAll.value,
+    })
+
+    return await waitForBridgeCwd(QUICK_START_CWD_RECOVERY_WAIT_MS)
   }
 
   function resolveTitleCandidateFromUserMessage(text: string): string | null {
@@ -2167,19 +2304,33 @@ function parseToolUserInputQuestions(params: Record<string, unknown>): ToolUserI
         return
       }
 
-      await loadThreadHistory()
-
-      const preferredThreadId =
-        selectedHistoryThreadId.value.trim().length > 0
-          ? selectedHistoryThreadId.value.trim()
-          : (threadHistory.value[0]?.id ?? '')
+      let preferredThreadId = ''
+      const historyScopeCwd = await waitForQuickStartHistoryScope()
+      if (historyScopeCwd !== null) {
+        await loadThreadHistory()
+        preferredThreadId =
+          selectedHistoryThreadId.value.trim().length > 0
+            ? selectedHistoryThreadId.value.trim()
+            : (threadHistory.value[0]?.id ?? '')
+      } else {
+        pushLog('rpc', 'warn', 'Quick start could not determine bridge cwd safely; skipped auto resume.', {
+          initialWaitMs: QUICK_START_CWD_WAIT_MS,
+          recoveryWaitMs: QUICK_START_CWD_RECOVERY_WAIT_MS,
+          showAll: historyShowAll.value,
+        })
+        setUserGuidance(
+          'warn',
+          '現在の workspace を特定できないため、自動で会話を開始しませんでした。Bridge の起動完了後に再試行してください。',
+        )
+        return
+      }
 
       if (preferredThreadId.length > 0) {
         await resumeThread(preferredThreadId)
       }
 
       if (activeThreadId.value.trim().length === 0) {
-        await startThread()
+        await startThread(historyShowAll.value ? undefined : historyScopeCwd)
       }
 
       await loadConfig()
@@ -2285,22 +2436,46 @@ function parseToolUserInputQuestions(params: Record<string, unknown>): ToolUserI
   }
 
   async function loadThreadHistory(): Promise<void> {
+    await loadThreadHistoryPage(false)
+  }
+
+  async function loadMoreThreadHistory(): Promise<void> {
+    await loadThreadHistoryPage(true)
+  }
+
+  async function loadThreadHistoryPage(append: boolean): Promise<void> {
     if (!client.value || !isConnected.value || !initialized.value) {
+      return
+    }
+    if (historyLoading.value) {
+      return
+    }
+    if (append && historyNextCursor.value.trim().length === 0) {
       return
     }
 
     try {
-      const response = await client.value.request('thread/list', {})
-      const parsedHistory = sortThreadHistoryByUpdatedAt(parseThreadHistoryList(response))
-      const nextHistory = applyThreadHistoryTitleOverrides(
-        parsedHistory,
+      historyLoading.value = true
+      const response = await client.value.request(
+        'thread/list',
+        buildThreadListParams(append ? historyNextCursor.value : null),
+      )
+      const parsedHistory = applyThreadHistoryTitleOverrides(
+        parseThreadHistoryList(response),
         historyTitleOverridesByThreadId.value,
       )
+      const nextHistory = append
+        ? mergeThreadHistoryPages(threadHistory.value, parsedHistory)
+        : parsedHistory
       threadHistory.value = nextHistory
+      historyNextCursor.value = extractThreadHistoryNextCursor(response) ?? ''
 
       if (nextHistory.length === 0) {
         selectedHistoryThreadId.value = ''
-        pushLog('rpc', 'info', 'thread/list completed (0 threads)', response)
+        pushLog('rpc', 'info', 'thread/list completed (0 threads)', {
+          response,
+          hasNextCursor: historyNextCursor.value.length > 0,
+        })
         return
       }
 
@@ -2313,11 +2488,23 @@ function parseToolUserInputQuestions(params: Record<string, unknown>): ToolUserI
         total: nextHistory.length,
         workspaceCount: workspaceKeys.size,
         bridgeCwd: bridgeCwd.value.trim() || null,
+        showAll: historyShowAll.value,
+        hasNextCursor: historyNextCursor.value.length > 0,
+        pageSize: HISTORY_PAGE_SIZE,
+        append,
       })
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error)
       pushLog('rpc', 'error', `thread/list failed: ${message}`)
+    } finally {
+      historyLoading.value = false
     }
+  }
+
+  async function toggleHistoryScope(): Promise<void> {
+    historyShowAll.value = !historyShowAll.value
+    historyNextCursor.value = ''
+    await loadThreadHistoryPage(false)
   }
 
   async function readThread(threadId?: string): Promise<void> {
@@ -2856,6 +3043,8 @@ function parseToolUserInputQuestions(params: Record<string, unknown>): ToolUserI
     isExecutionModeSaving,
     quickStartInProgress,
     userGuidance,
+    historyShowAll,
+    historyLoading,
     messages,
     logs,
     toolCalls,
@@ -2880,6 +3069,7 @@ function parseToolUserInputQuestions(params: Record<string, unknown>): ToolUserI
     canInterruptTurn,
     canReadSelectedHistoryThread,
     canQuickStartConversation,
+    historyCanLoadMore,
     workspaceHistoryGroups,
     currentToolUserInputRequest,
     currentApproval,
@@ -2897,6 +3087,8 @@ function parseToolUserInputQuestions(params: Record<string, unknown>): ToolUserI
     startThread,
     listDirectories,
     loadThreadHistory,
+    loadMoreThreadHistory,
+    toggleHistoryScope,
     readThread,
     resumeThread,
     sendTurn,

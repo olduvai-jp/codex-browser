@@ -243,18 +243,45 @@ describe('App.vue ui phase-1 flows', () => {
     wrapper.unmount()
   })
 
-  it('quick start connects and restores the latest conversation path', async () => {
-    bridgeMock.setRequestHandler(async (method) => {
+  it('quick start waits for bridge cwd and restores the scoped latest conversation path', async () => {
+    bridgeMock.setRequestHandler(async (method, params) => {
       if (method === 'initialize') {
+        queueMicrotask(() => {
+          getClientInstance().emitMessage({
+            type: 'bridge/status',
+            payload: {
+              event: 'bridge-started',
+              details: {
+                cwd: '/workspace/current',
+              },
+            },
+          })
+        })
         return { userAgent: 'mock-codex-agent' }
       }
 
       if (method === 'thread/list') {
+        const request = params as Record<string, unknown>
+        if (request.cwd !== '/workspace/current') {
+          return {
+            threads: [
+              {
+                id: 'thread-other-workspace',
+                title: 'Wrong Thread',
+                cwd: '/workspace/other',
+                updatedAt: '2026-02-18T02:00:00.000Z',
+                turnCount: 1,
+              },
+            ],
+          }
+        }
+
         return {
           threads: [
             {
               id: 'thread-quick-1',
               title: 'Quick Thread',
+              cwd: '/workspace/current',
               updatedAt: '2026-02-18T01:00:00.000Z',
               turnCount: 1,
             },
@@ -293,12 +320,141 @@ describe('App.vue ui phase-1 flows', () => {
     await flushPromises()
 
     expect(findRequestCall('initialize')).toBeDefined()
-    expect(findRequestCall('thread/list')).toBeDefined()
+    expect(findRequestCall('thread/list')).toEqual({
+      method: 'thread/list',
+      params: {
+        limit: 25,
+        sortKey: 'updated_at',
+        archived: false,
+        sourceKinds: [],
+        cwd: '/workspace/current',
+      },
+    })
     expect(findRequestCall('thread/resume')).toBeDefined()
     expect(wrapper.text()).toContain('会話 ID: thread-quick-1')
     expect(wrapper.text()).toContain('Quick start restored user message')
+    expect(wrapper.text()).not.toContain('Wrong Thread')
 
     wrapper.unmount()
+  })
+
+  it('quick start recovers delayed bridge cwd before restoring the scoped latest conversation path', async () => {
+    vi.useFakeTimers()
+
+    try {
+      bridgeMock.setRequestHandler(async (method, params) => {
+        if (method === 'initialize') {
+          window.setTimeout(() => {
+            getClientInstance().emitMessage({
+              type: 'bridge/status',
+              payload: {
+                event: 'bridge-started',
+                details: {
+                  cwd: '/workspace/current',
+                },
+              },
+            })
+          }, 200)
+          return { userAgent: 'mock-codex-agent' }
+        }
+
+        if (method === 'model/list') {
+          return { models: [] }
+        }
+
+        if (method === 'thread/list') {
+          const request = params as Record<string, unknown>
+          if (request.cwd !== '/workspace/current') {
+            return {
+              threads: [
+                {
+                  id: 'thread-delayed-other',
+                  title: 'Wrong delayed thread',
+                  cwd: '/workspace/other',
+                  updatedAt: '2026-02-18T03:00:00.000Z',
+                  turnCount: 1,
+                },
+              ],
+            }
+          }
+
+          return {
+            threads: [
+              {
+                id: 'thread-delayed-current-newest',
+                title: 'Delayed Quick Thread',
+                cwd: '/workspace/current',
+                updatedAt: '2026-02-18T04:00:00.000Z',
+                turnCount: 1,
+              },
+              {
+                id: 'thread-delayed-current-older',
+                title: 'Delayed Older Quick Thread',
+                cwd: '/workspace/current',
+                updatedAt: '2026-02-18T03:30:00.000Z',
+                turnCount: 1,
+              },
+            ],
+          }
+        }
+
+        if (method === 'thread/resume') {
+          return {
+            thread: {
+              id: 'thread-delayed-current-newest',
+              turns: [
+                {
+                  id: 'turn-delayed-quick-1',
+                  items: [
+                    {
+                      type: 'userMessage',
+                      content: [
+                        {
+                          type: 'text',
+                          text: 'Delayed quick start restored user message',
+                        },
+                      ],
+                    },
+                  ],
+                },
+              ],
+            },
+          }
+        }
+
+        throw new Error(`Unexpected method: ${method}`)
+      })
+
+      const wrapper = mount(App)
+      await flushPromises()
+      await vi.advanceTimersByTimeAsync(200)
+      await flushPromises()
+
+      expect(findRequestCall('thread/list')).toEqual({
+        method: 'thread/list',
+        params: {
+          limit: 25,
+          sortKey: 'updated_at',
+          archived: false,
+          sourceKinds: [],
+          cwd: '/workspace/current',
+        },
+      })
+      expect(findRequestCall('thread/start')).toBeUndefined()
+      expect(findRequestCall('thread/resume')).toEqual({
+        method: 'thread/resume',
+        params: {
+          threadId: 'thread-delayed-current-newest',
+        },
+      })
+      expect(wrapper.text()).toContain('会話 ID: thread-delayed-current-newest')
+      expect(wrapper.text()).toContain('Delayed quick start restored user message')
+      expect(wrapper.text()).not.toContain('Wrong delayed thread')
+
+      wrapper.unmount()
+    } finally {
+      vi.useRealTimers()
+    }
   })
 
   it('handles thread/start and turn/start with streaming delta and turn completion updates', async () => {
@@ -1373,35 +1529,42 @@ describe('App.vue ui phase-1 flows', () => {
     wrapper.unmount()
   })
 
-  it('groups thread history by workspace, keeps non-current workspaces visible, and caps each group to 50', async () => {
-    const historyEntries = [
-      ...Array.from({ length: 55 }, (_value, index) => ({
-        id: `thread-current-${index + 1}`,
-        title: `Current ${index + 1}`,
-        cwd: '/workspace/current',
-        updatedAt: `2026-02-28T10:${String(index).padStart(2, '0')}:00.000Z`,
-      })),
-      ...Array.from({ length: 3 }, (_value, index) => ({
-        id: `thread-other-${index + 1}`,
-        title: `Other ${index + 1}`,
-        cwd: '/other/workspace',
-        updatedAt: `2026-02-20T09:0${index}:00.000Z`,
-      })),
-      ...Array.from({ length: 2 }, (_value, index) => ({
-        id: `thread-unknown-${index + 1}`,
-        title: `Unknown ${index + 1}`,
-        updatedAt: `2026-02-19T08:0${index}:00.000Z`,
-      })),
-    ]
-
-    bridgeMock.setRequestHandler(async (method) => {
+  it('defaults history to the current workspace scope and exposes show-all as an explicit toggle', async () => {
+    bridgeMock.setRequestHandler(async (method, params) => {
       if (method === 'initialize') {
         return { userAgent: 'mock-codex-agent' }
       }
 
       if (method === 'thread/list') {
+        const request = params as Record<string, unknown>
+        if (request.cwd === '/workspace/current') {
+          return {
+            threads: [
+              {
+                id: 'thread-current-1',
+                title: 'Current 1',
+                cwd: '/workspace/current',
+                updatedAt: '2026-02-28T10:00:00.000Z',
+              },
+            ],
+          }
+        }
+
         return {
-          threads: historyEntries,
+          threads: [
+            {
+              id: 'thread-current-1',
+              title: 'Current 1',
+              cwd: '/workspace/current',
+              updatedAt: '2026-02-28T10:00:00.000Z',
+            },
+            {
+              id: 'thread-other-1',
+              title: 'Other 1',
+              cwd: '/other/workspace',
+              updatedAt: '2026-02-20T09:00:00.000Z',
+            },
+          ],
         }
       }
 
@@ -1425,33 +1588,117 @@ describe('App.vue ui phase-1 flows', () => {
     await getByTestId(wrapper, 'history-refresh-button').trigger('click')
     await flushPromises()
 
-    // Switch to grouped (WS別) view
-    const groupedButton = wrapper.findAll('aside button').find((b) => b.text().trim() === 'WS別')
-    expect(groupedButton?.exists()).toBe(true)
-    await groupedButton!.trigger('click')
+    const scopedThreadListCalls = bridgeMock
+      .getRequestCalls()
+      .filter((call) => call.method === 'thread/list')
+    const scopedThreadListCall = scopedThreadListCalls[scopedThreadListCalls.length - 1]
+    expect(scopedThreadListCall?.params).toEqual({
+      limit: 25,
+      sortKey: 'updated_at',
+      archived: false,
+      sourceKinds: [],
+      cwd: '/workspace/current',
+    })
+
+    let visibleLabels = getVisibleHistoryThreadLabels(wrapper)
+    expect(visibleLabels).toEqual(['Current 1'])
+    expect(wrapper.text()).not.toContain('Other 1')
+
+    await getByTestId(wrapper, 'history-scope-toggle-button').trigger('click')
     await flushPromises()
 
-    expect(wrapper.text()).toContain('current')
-    expect(wrapper.text()).toContain('workspace')
-    expect(wrapper.text()).toContain('(unknown workspace)')
+    const showAllThreadListCalls = bridgeMock
+      .getRequestCalls()
+      .filter((call) => call.method === 'thread/list')
+    const showAllThreadListCall = showAllThreadListCalls[showAllThreadListCalls.length - 1]
+    expect(showAllThreadListCall?.params).toEqual({
+      limit: 25,
+      sortKey: 'updated_at',
+      archived: false,
+      sourceKinds: [],
+    })
 
-    const currentWorkspaceToggle = getWorkspaceGroupToggle(wrapper, '/workspace/current')
-    const otherWorkspaceToggle = getWorkspaceGroupToggle(wrapper, '/other/workspace')
-    const unknownWorkspaceToggle = getWorkspaceGroupToggle(wrapper, '(unknown workspace)')
-    expect(currentWorkspaceToggle.text()).toContain('55')
-    expect(otherWorkspaceToggle.text()).toContain('3')
-    expect(unknownWorkspaceToggle.text()).toContain('2')
+    visibleLabels = getVisibleHistoryThreadLabels(wrapper)
+    expect(visibleLabels).toContain('Current 1')
+    expect(visibleLabels).toContain('Other 1')
 
-    const initiallyVisibleLabels = getVisibleHistoryThreadLabels(wrapper)
-    expect(initiallyVisibleLabels).toHaveLength(50)
-    expect(initiallyVisibleLabels.every((entry) => entry.startsWith('Current '))).toBe(true)
+    wrapper.unmount()
+  })
 
-    await otherWorkspaceToggle.trigger('click')
+  it('loads more history with nextCursor and appends the next page', async () => {
+    bridgeMock.setRequestHandler(async (method, params) => {
+      if (method === 'initialize') {
+        return { userAgent: 'mock-codex-agent' }
+      }
+      if (method === 'thread/list') {
+        const request = params as Record<string, unknown>
+        if (request.cursor === 'cursor-2') {
+          return {
+            threads: [
+              {
+                id: 'thread-current-2',
+                title: 'Current 2',
+                cwd: '/workspace/current',
+                updatedAt: '2026-02-28T09:00:00.000Z',
+              },
+            ],
+            nextCursor: null,
+          }
+        }
+
+        return {
+          threads: [
+            {
+              id: 'thread-current-1',
+              title: 'Current 1',
+              cwd: '/workspace/current',
+              updatedAt: '2026-02-28T10:00:00.000Z',
+            },
+          ],
+          nextCursor: 'cursor-2',
+        }
+      }
+
+      throw new Error(`Unexpected method: ${method}`)
+    })
+
+    const wrapper = mount(App)
+    const client = await connectAndInitialize(wrapper)
+
+    client.emitMessage({
+      type: 'bridge/status',
+      payload: {
+        event: 'bridge-started',
+        details: {
+          cwd: '/workspace/current',
+        },
+      },
+    })
     await flushPromises()
 
-    const labelsAfterExpandingOther = getVisibleHistoryThreadLabels(wrapper)
-    expect(labelsAfterExpandingOther).toContain('Other 1')
-    expect(labelsAfterExpandingOther).toHaveLength(53)
+    await getByTestId(wrapper, 'history-refresh-button').trigger('click')
+    await flushPromises()
+
+    expect(getVisibleHistoryThreadLabels(wrapper)).toEqual(['Current 1'])
+    expect(getByTestId(wrapper, 'history-load-more-button').attributes('disabled')).toBeUndefined()
+
+    await getByTestId(wrapper, 'history-load-more-button').trigger('click')
+    await flushPromises()
+
+    const loadMoreThreadListCalls = bridgeMock
+      .getRequestCalls()
+      .filter((call) => call.method === 'thread/list')
+    const loadMoreThreadListCall = loadMoreThreadListCalls[loadMoreThreadListCalls.length - 1]
+    expect(loadMoreThreadListCall?.params).toEqual({
+      limit: 25,
+      sortKey: 'updated_at',
+      archived: false,
+      sourceKinds: [],
+      cwd: '/workspace/current',
+      cursor: 'cursor-2',
+    })
+    expect(getVisibleHistoryThreadLabels(wrapper)).toEqual(['Current 1', 'Current 2'])
+    expect(getByTestId(wrapper, 'history-load-more-button').attributes('disabled')).toBe('')
 
     wrapper.unmount()
   })
@@ -1829,13 +2076,13 @@ describe('App.vue ui phase-1 flows', () => {
     await openAdvancedPanel(wrapper)
 
     const initialConfigCalls = bridgeMock.getRequestCalls().filter((call) => call.method === 'config/read')
-    expect(initialConfigCalls.length).toBeGreaterThan(0)
+    expect(initialConfigCalls).toHaveLength(0)
 
     await getByTestId(wrapper, 'load-config-button').trigger('click')
     await flushPromises()
 
     const configCalls = bridgeMock.getRequestCalls().filter((call) => call.method === 'config/read')
-    expect(configCalls).toHaveLength(initialConfigCalls.length + 1)
+    expect(configCalls).toHaveLength(1)
     expect(configCalls[configCalls.length - 1]?.params).toEqual({ includeLayers: true })
     expect(wrapper.text()).toContain('approvalPolicy')
     expect(wrapper.text()).toContain('on-request')
@@ -1847,6 +2094,17 @@ describe('App.vue ui phase-1 flows', () => {
   it('auto-loads execution mode config during quick start so the composer reflects current restrictions', async () => {
     bridgeMock.setRequestHandler(async (method) => {
       if (method === 'initialize') {
+        queueMicrotask(() => {
+          getClientInstance().emitMessage({
+            type: 'bridge/status',
+            payload: {
+              event: 'bridge-started',
+              details: {
+                cwd: '/workspace/current',
+              },
+            },
+          })
+        })
         return { userAgent: 'mock-codex-agent' }
       }
 
@@ -1893,7 +2151,14 @@ describe('App.vue ui phase-1 flows', () => {
     await flushPromises()
     await flushPromises()
 
-    expect(findRequestCall('config/read')?.params).toEqual({ includeLayers: true })
+    expect(findRequestCall('config/read')?.params).toEqual({
+      includeLayers: true,
+      cwd: '/workspace/current',
+    })
+    expect(findRequestCall('thread/start')?.params).toEqual({
+      experimentalRawEvents: false,
+      cwd: '/workspace/current',
+    })
     expect(findRequestCall('configRequirements/read')?.params).toBeUndefined()
     expect(wrapper.text()).toContain('会話 ID: thread-execution-mode-autoload-1')
     expect((wrapper.get('select[data-testid="execution-mode-select"]').element as HTMLSelectElement).value).toBe(
@@ -2451,6 +2716,17 @@ describe('App.vue ui phase-1 flows', () => {
     let threadStartCallCount = 0
     bridgeMock.setRequestHandler(async (method) => {
       if (method === 'initialize') {
+        queueMicrotask(() => {
+          getClientInstance().emitMessage({
+            type: 'bridge/status',
+            payload: {
+              event: 'bridge-started',
+              details: {
+                cwd: '/workspace/current',
+              },
+            },
+          })
+        })
         return { userAgent: 'mock-codex-agent' }
       }
 
@@ -3328,6 +3604,9 @@ describe('ThreadSidebar workspace expansion sync', () => {
         selectedThreadId: 'thread-selected',
         activeThreadId: '',
         canRefresh: true,
+        historyShowAll: false,
+        historyLoading: false,
+        canLoadMoreHistory: false,
         isTurnActive: false,
         advancedPanelOpen: false,
         isConnected: true,

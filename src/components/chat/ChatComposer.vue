@@ -149,9 +149,6 @@ function onSaveExecutionModeConfig() {
   if (!canSaveExecutionModeConfig()) {
     return
   }
-  if (props.selectedExecutionModePreset === 'dangerously-bypass' && !window.confirm('危険モードを保存します。実行を許可し、サンドボックスを解除します。本当に保存しますか？')) {
-    return
-  }
   emit('saveExecutionModeConfig')
 }
 

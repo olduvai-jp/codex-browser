@@ -2604,54 +2604,7 @@ describe('App.vue ui phase-1 flows', () => {
     wrapper.unmount()
   })
 
-  it('does not save dangerous execution mode without confirmation', async () => {
-    const confirmSpy = vi.spyOn(window, 'confirm').mockReturnValue(false)
-    bridgeMock.setRequestHandler(async (method) => {
-      if (method === 'initialize') {
-        return { userAgent: 'mock-codex-agent' }
-      }
-
-      if (method === 'config/read') {
-        return {
-          result: {
-            values: {
-              approvalPolicy: 'on-request',
-              sandbox: 'workspace-write',
-            },
-          },
-        }
-      }
-
-      if (method === 'configRequirements/read') {
-        return {
-          allowedApprovalPolicies: ['on-request', 'never'],
-          allowedSandboxModes: ['workspace-write', 'danger-full-access'],
-        }
-      }
-
-      throw new Error(`Unexpected method: ${method}`)
-    })
-
-    const wrapper = mount(App)
-    await connectAndInitialize(wrapper)
-    await openAdvancedPanel(wrapper)
-    await getByTestId(wrapper, 'load-config-button').trigger('click')
-    await flushPromises()
-
-    await getByTestId(wrapper, 'execution-mode-select').setValue('dangerously-bypass')
-    await flushPromises()
-    await getByTestId(wrapper, 'execution-mode-save-button').trigger('click')
-    await flushPromises()
-
-    expect(confirmSpy).toHaveBeenCalled()
-    const batchWriteCalls = bridgeMock.getRequestCalls().filter((call) => call.method === 'config/batchWrite')
-    expect(batchWriteCalls).toHaveLength(0)
-    confirmSpy.mockRestore()
-    wrapper.unmount()
-  })
-
-  it('saves dangerous execution mode after explicit confirmation', async () => {
-    const confirmSpy = vi.spyOn(window, 'confirm').mockReturnValue(true)
+  it('saves dangerous execution mode without confirmation', async () => {
     bridgeMock.setRequestHandler(async (method) => {
       if (method === 'initialize') {
         return { userAgent: 'mock-codex-agent' }
@@ -2696,7 +2649,6 @@ describe('App.vue ui phase-1 flows', () => {
     await getByTestId(wrapper, 'execution-mode-save-button').trigger('click')
     await flushPromises()
 
-    expect(confirmSpy).toHaveBeenCalled()
     const batchWriteCalls = bridgeMock.getRequestCalls().filter((call) => call.method === 'config/batchWrite')
     expect(batchWriteCalls).toHaveLength(1)
     expect(batchWriteCalls[0]?.params).toMatchObject({
@@ -2715,7 +2667,6 @@ describe('App.vue ui phase-1 flows', () => {
       ],
     })
 
-    confirmSpy.mockRestore()
     wrapper.unmount()
   })
 

@@ -92,23 +92,7 @@ describe('ChatComposer', () => {
     expect(wrapper.emitted('saveExecutionModeConfig')).toHaveLength(1)
   })
 
-  it('requires confirmation before saving dangerously bypass execution mode', async () => {
-    const confirmSpy = vi.spyOn(window, 'confirm').mockReturnValue(false)
-    const wrapper = mountComposer()
-
-    await wrapper.get('select[data-testid="execution-mode-select"]').setValue('dangerously-bypass')
-    await wrapper.setProps({ selectedExecutionModePreset: 'dangerously-bypass' })
-    await wrapper.get('button[data-testid="execution-mode-save-button"]').trigger('click')
-
-    expect(wrapper.emitted('update:selectedExecutionModePreset')).toEqual([['dangerously-bypass']])
-    expect(confirmSpy).toHaveBeenCalled()
-    expect(wrapper.emitted('saveExecutionModeConfig')).toBeUndefined()
-
-    confirmSpy.mockRestore()
-  })
-
-  it('emits save after confirming dangerous execution mode', async () => {
-    const confirmSpy = vi.spyOn(window, 'confirm').mockReturnValue(true)
+  it('saves dangerously bypass execution mode without confirmation', async () => {
     const wrapper = mountComposer()
 
     await wrapper.get('select[data-testid="execution-mode-select"]').setValue('dangerously-bypass')
@@ -117,9 +101,6 @@ describe('ChatComposer', () => {
 
     expect(wrapper.emitted('update:selectedExecutionModePreset')).toEqual([['dangerously-bypass']])
     expect(wrapper.emitted('saveExecutionModeConfig')).toHaveLength(1)
-    expect(confirmSpy).toHaveBeenCalled()
-
-    confirmSpy.mockRestore()
   })
 
   it('disables dangerous preset when requirements are restricted', async () => {

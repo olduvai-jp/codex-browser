@@ -328,7 +328,10 @@ function applyExecutionModeStateFromPair(
   }
   const nextPreset = executionModePresetFromValues(pair.approvalPolicy, pair.sandboxMode)
   executionModeState.executionModeCurrentPreset.value = nextPreset
-  executionModeState.selectedExecutionModePreset.value = nextPreset
+  // Keep user's selected preset unless it was never explicitly changed
+  if (executionModeState.selectedExecutionModePreset.value === DEFAULT_EXECUTION_MODE_PRESET) {
+    executionModeState.selectedExecutionModePreset.value = nextPreset
+  }
 }
 
 function applyThreadHistoryTitleOverrides(

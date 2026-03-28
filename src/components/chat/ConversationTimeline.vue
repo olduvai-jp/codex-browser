@@ -1,5 +1,6 @@
 <script setup lang="ts">
-import { ref } from 'vue'
+import MarkdownIt from 'markdown-it'
+import { computed, nextTick, onMounted, ref, watch } from 'vue'
 import type { TimelineItem, UiMessage } from '@/types'
 
 const props = defineProps<{
@@ -12,7 +13,99 @@ type TimelineToolCall = Extract<TimelineItem, { kind: 'tool' }>['toolCall']
 type TimelineApprovalEntry = Extract<TimelineItem, { kind: 'approval' }>
 type TimelineToolUserInputEntry = Extract<TimelineItem, { kind: 'toolUserInput' }>
 
+const markdown = new MarkdownIt({
+  html: false,
+  linkify: true,
+  breaks: true,
+})
+
 const expandedTools = ref(new Set<string>())
+const scrollContainerRef = ref<HTMLDivElement | null>(null)
+const shouldFollowLatest = ref(true)
+const SCROLL_FOLLOW_THRESHOLD_PX = 24
+
+function isNearBottom(container: HTMLElement): boolean {
+  const remainingDistance = container.scrollHeight - container.scrollTop - container.clientHeight
+  return remainingDistance <= SCROLL_FOLLOW_THRESHOLD_PX
+}
+
+function scrollToBottom(): void {
+  const container = scrollContainerRef.value
+  if (!container) {
+    return
+  }
+
+  if (typeof container.scrollTo === 'function') {
+    container.scrollTo({ top: container.scrollHeight, behavior: 'auto' })
+    return
+  }
+
+  container.scrollTop = container.scrollHeight
+}
+
+function onTimelineScroll(): void {
+  const container = scrollContainerRef.value
+  if (!container) {
+    return
+  }
+
+  shouldFollowLatest.value = isNearBottom(container)
+}
+
+function timelineItemUpdateSignature(item: TimelineItem): string {
+  if (item.kind === 'message') {
+    return `${item.id}:${item.message.text.length}:${item.message.streaming ? '1' : '0'}`
+  }
+  if (item.kind === 'tool') {
+    return `${item.id}:${item.toolCall.status}:${item.toolCall.outputText.length}`
+  }
+  if (item.kind === 'turnStatus') {
+    return `${item.id}:${item.status}:${item.label}`
+  }
+  if (item.kind === 'approval') {
+    return `${item.id}:${item.state}:${item.decision ?? ''}`
+  }
+
+  return `${item.id}:${item.state}:${item.questions.length}:${item.answers ? Object.keys(item.answers).length : 0}`
+}
+
+function timelineMessageUpdateSignature(items: TimelineItem[]): string {
+  const messageSignatures: string[] = []
+  for (const item of items) {
+    if (item.kind === 'message') {
+      messageSignatures.push(
+        `${item.id}:${item.message.text.length}:${item.message.streaming ? '1' : '0'}`,
+      )
+    }
+  }
+  return messageSignatures.join('|')
+}
+
+const timelineUpdateKey = computed(() => {
+  const lastItemIndex = props.timelineItems.length - 1
+  if (lastItemIndex < 0) {
+    return 'empty'
+  }
+
+  const lastItem = props.timelineItems[lastItemIndex]
+  if (!lastItem) {
+    return 'empty'
+  }
+
+  return `${props.timelineItems.length}:${timelineItemUpdateSignature(lastItem)}:${timelineMessageUpdateSignature(props.timelineItems)}`
+})
+
+watch(timelineUpdateKey, async () => {
+  await nextTick()
+  if (shouldFollowLatest.value) {
+    scrollToBottom()
+  }
+})
+
+onMounted(async () => {
+  await nextTick()
+  scrollToBottom()
+})
 
 function toggleToolExpand(id: string): void {
   if (expandedTools.value.has(id)) {
@@ -144,6 +237,9 @@ function isContinuation(index: number): boolean {
   if (!entry || entry.kind !== 'message' || entry.message.role !== 'assistant') return false
   for (let i = index - 1; i >= 0; i--) {
     const prev = props.timelineItems[i]
+    if (!prev) {
+      continue
+    }
     if (prev.kind === 'message') {
       return prev.message.role === 'assistant'
     }
@@ -264,10 +360,26 @@ function toolUserInputSummary(entry: TimelineToolUserInputEntry): string {
 
   return `入力項目 ${entry.questions.length}件`
 }
+
+function renderMessageContent(message: UiMessage): string {
+  const content = message.text || (message.streaming ? '...' : '')
+  if (content.length === 0) {
+    return ''
+  }
+
+  return markdown.render(content)
+}
 </script>
 
 <template>
-  <div class="flex-1 overflow-y-auto" role="log" aria-live="polite">
+  <div
+    ref="scrollContainerRef"
+    class="flex-1 overflow-y-auto"
+    role="log"
+    aria-live="polite"
+    data-testid="conversation-timeline-scroll"
+    @scroll.passive="onTimelineScroll"
+  >
     <!-- Empty state -->
     <div
       v-if="timelineItems.length === 0"
@@ -342,10 +454,12 @@ function toolUserInputSummary(entry: TimelineToolUserInputEntry): string {
               >
                 {{ entry.message.summaryText }}
               </p>
-              <pre
-                class="whitespace-pre-wrap break-words font-sans text-[15px] leading-7 text-text-primary"
+              <div
+                class="break-words text-[15px] leading-7 text-text-primary [&_a]:underline [&_code]:font-mono [&_ol]:list-decimal [&_ol]:pl-6 [&_pre]:my-2 [&_pre]:overflow-x-auto [&_pre]:rounded-lg [&_pre]:bg-surface-secondary [&_pre]:p-3 [&_pre]:font-mono [&_pre]:text-xs [&_ul]:list-disc [&_ul]:pl-6"
                 :class="isContinuation(idx) ? '' : 'mt-1'"
-              >{{ entry.message.text || (entry.message.streaming ? '...' : '') }}</pre>
+                data-testid="timeline-message-markdown"
+                v-html="renderMessageContent(entry.message)"
+              />
             </div>
           </div>
         </template>

@@ -174,6 +174,14 @@ function getTimelineText(wrapper: VueWrapper<ComponentPublicInstance>): string {
     .join('\n')
 }
 
+function getTimelineMessageTexts(wrapper: VueWrapper<ComponentPublicInstance>): string[] {
+  return wrapper
+    .findAll('[data-testid="timeline-item"][data-timeline-kind="message"]')
+    .map((entry) => entry.find('[data-testid="timeline-message-markdown"]'))
+    .filter((entry) => entry.exists())
+    .map((entry) => entry.text())
+}
+
 describe('App.vue ui phase-1 flows', () => {
   beforeEach(() => {
     bridgeMock.reset()
@@ -629,7 +637,7 @@ describe('App.vue ui phase-1 flows', () => {
     })
     await flushPromises()
 
-    let conversationTexts = wrapper.findAll('[data-timeline-kind="message"] pre').map((entry) => entry.text())
+    let conversationTexts = getTimelineMessageTexts(wrapper)
     expect(conversationTexts[conversationTexts.length - 1]).toBe('...')
     expect(wrapper.findAll('.assistant-summary').map((entry) => entry.text())).toContain('Reasoning summary text')
 
@@ -655,7 +663,7 @@ describe('App.vue ui phase-1 flows', () => {
     })
     await flushPromises()
 
-    conversationTexts = wrapper.findAll('[data-timeline-kind="message"] pre').map((entry) => entry.text())
+    conversationTexts = getTimelineMessageTexts(wrapper)
     expect(conversationTexts[conversationTexts.length - 1]).toContain('streamed answer')
     expect(wrapper.find('.assistant-summary').exists()).toBe(false)
 
@@ -749,7 +757,7 @@ describe('App.vue ui phase-1 flows', () => {
     })
     await flushPromises()
 
-    const conversationTexts = wrapper.findAll('[data-timeline-kind="message"] pre').map((entry) => entry.text())
+    const conversationTexts = getTimelineMessageTexts(wrapper)
     expect(conversationTexts[conversationTexts.length - 1]).toBe('final answer')
     expect(wrapper.find('.assistant-summary').exists()).toBe(false)
     expect(wrapper.text()).not.toContain('Unhandled notification: item/reasoning/summaryTextDelta')
@@ -817,7 +825,7 @@ describe('App.vue ui phase-1 flows', () => {
     })
     await flushPromises()
 
-    let conversationTexts = wrapper.findAll('[data-timeline-kind="message"] pre').map((entry) => entry.text())
+    let conversationTexts = getTimelineMessageTexts(wrapper)
     expect(conversationTexts[conversationTexts.length - 1]).toBe('final answer first')
 
     client.emitMessage({
@@ -837,7 +845,7 @@ describe('App.vue ui phase-1 flows', () => {
     })
     await flushPromises()
 
-    conversationTexts = wrapper.findAll('[data-timeline-kind="message"] pre').map((entry) => entry.text())
+    conversationTexts = getTimelineMessageTexts(wrapper)
     expect(conversationTexts[conversationTexts.length - 1]).toBe('final answer first')
     expect(wrapper.find('.assistant-summary').exists()).toBe(false)
 
@@ -1246,7 +1254,7 @@ describe('App.vue ui phase-1 flows', () => {
     expect(wrapper.text()).toContain('会話 ID: thread-resume-1')
     expect(wrapper.text()).toContain('応答状態: idle')
 
-    const conversationTexts = wrapper.findAll('[data-timeline-kind="message"] pre').map((entry) => entry.text())
+    const conversationTexts = getTimelineMessageTexts(wrapper)
     expect(conversationTexts).toEqual([
       'Hydrated user message',
       'Hydrated assistant reply',

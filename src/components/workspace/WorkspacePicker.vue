@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { ref, onMounted } from 'vue'
 import type { DirectoryListResult, DirectoryEntry } from '@/types'
+import { useModalFocusTrap } from '@/composables/useModalFocusTrap'
 
 const props = defineProps<{
   initialPath: string
@@ -17,6 +18,11 @@ const parentPath = ref<string | null>(null)
 const directories = ref<DirectoryEntry[]>([])
 const loading = ref(false)
 const error = ref<string | null>(null)
+const modalRef = ref<HTMLElement | null>(null)
+const { focusInitialElement, handleModalKeydown } = useModalFocusTrap({
+  containerRef: modalRef,
+  onEscape: () => emit('cancel'),
+})
 
 async function loadDirectory(path?: string): Promise<void> {
   loading.value = true
@@ -51,7 +57,8 @@ function selectCurrentDirectory(): void {
 }
 
 onMounted(() => {
-  loadDirectory(props.initialPath)
+  void focusInitialElement()
+  void loadDirectory(props.initialPath)
 })
 </script>
 
@@ -62,8 +69,11 @@ onMounted(() => {
     @click.self="emit('cancel')"
   >
     <article
+      ref="modalRef"
       class="flex w-full max-w-lg flex-col gap-4 rounded-2xl border border-border-default bg-surface p-6 shadow-xl"
       data-testid="workspace-picker-modal"
+      tabindex="-1"
+      @keydown="handleModalKeydown"
     >
       <!-- Header -->
       <div class="flex items-center gap-3">

@@ -146,4 +146,23 @@ describe('ChatComposer', () => {
     expect(wrapper.get('[data-testid="execution-mode-save-button"]').attributes('disabled')).toBeDefined()
   })
 
+  it('auto-resizes textarea on input and external modelValue updates', async () => {
+    const wrapper = mountComposer({ modelValue: '' })
+    const textarea = wrapper.get('textarea').element as HTMLTextAreaElement
+
+    let currentScrollHeight = 72
+    Object.defineProperty(textarea, 'scrollHeight', {
+      configurable: true,
+      get: () => currentScrollHeight,
+    })
+
+    await wrapper.get('textarea').setValue('1行目\n2行目')
+    expect(textarea.style.height).toBe('72px')
+
+    currentScrollHeight = 128
+    await wrapper.setProps({ modelValue: '外部更新\n2行目\n3行目' })
+    await wrapper.vm.$nextTick()
+    expect(textarea.style.height).toBe('128px')
+  })
+
 })

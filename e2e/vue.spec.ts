@@ -216,7 +216,18 @@ class MockBridgeServer {
 async function connectAndInitialize(page: Page, bridge: MockBridgeServer): Promise<void> {
   await page.goto(`/?bridgeUrl=${encodeURIComponent(bridge.url)}`)
 
-  const initializeRequest = await bridge.waitForRequest('initialize', DEFAULT_WS_HANDSHAKE_TIMEOUT_MS)
+  let initializeRequest: { id: JsonRpcId; params: unknown } | null = null
+  try {
+    initializeRequest = await bridge.waitForRequest('initialize', 1500)
+  } catch {
+    await page.getByTestId('connect-button').click()
+    initializeRequest = await bridge.waitForRequest('initialize', DEFAULT_WS_HANDSHAKE_TIMEOUT_MS)
+  }
+
+  if (!initializeRequest) {
+    throw new Error('initialize request was not received')
+  }
+
   expect(initializeRequest.params).toEqual({
     clientInfo: {
       name: 'vue-codex-client',
@@ -609,5 +620,153 @@ test.describe('Phase 4 Cycle 1 QA flows', () => {
       ],
       model: 'gpt-4o-mini',
     })
+  })
+
+  test('high-priority usability smoke: multiline input, markdown render, approval Escape', async ({
+    page,
+  }) => {
+    await connectAndInitialize(page, bridge)
+
+    await page.locator('aside button[aria-label="新しい会話"]').click()
+
+    const firstThreadMessage = await bridge.waitForMessage(
+      (message) => message.method === 'thread/list' || message.method === 'thread/start',
+    )
+
+    let threadStartRequest: { id: JsonRpcId; params: unknown } | null = null
+    if (firstThreadMessage.method === 'thread/list') {
+      if (!isJsonRpcId(firstThreadMessage.id)) {
+        throw new Error('thread/list request did not include a valid JSON-RPC id')
+      }
+      bridge.send({
+        id: firstThreadMessage.id,
+        result: {
+          threads: [],
+        },
+      })
+
+      threadStartRequest = await bridge.waitForRequest('thread/start')
+    } else {
+      if (!isJsonRpcId(firstThreadMessage.id)) {
+        throw new Error('thread/start request did not include a valid JSON-RPC id')
+      }
+      threadStartRequest = {
+        id: firstThreadMessage.id,
+        params: firstThreadMessage.params,
+      }
+    }
+
+    if (!threadStartRequest) {
+      throw new Error('thread/start request was not received')
+    }
+
+    expect(threadStartRequest.params).toEqual({ experimentalRawEvents: false })
+    bridge.send({
+      id: threadStartRequest.id,
+      result: {
+        thread: {
+          id: 'thread-smoke-1',
+        },
+      },
+    })
+
+    await expect(page.getByPlaceholder('Codex にメッセージを送信...')).toBeEnabled()
+
+    const multilineInput = 'line one\nline two'
+    await page.getByPlaceholder('Codex にメッセージを送信...').fill(multilineInput)
+    await page.getByTestId('send-turn-button').click()
+
+    const turnStart = await bridge.waitForRequest('turn/start')
+    expect(turnStart.params).toEqual({
+      threadId: 'thread-smoke-1',
+      input: [
+        {
+          type: 'text',
+          text: multilineInput,
+          text_elements: [],
+        },
+      ],
+    })
+
+    bridge.send({
+      id: turnStart.id,
+      result: {
+        turn: {
+          id: 'turn-smoke-1',
+        },
+      },
+    })
+    bridge.send({
+      method: 'turn/started',
+      params: {
+        turn: {
+          id: 'turn-smoke-1',
+        },
+      },
+    })
+    bridge.send({
+      method: 'item/started',
+      params: {
+        turnId: 'turn-smoke-1',
+        item: {
+          type: 'agentMessage',
+          id: 'item-smoke-1',
+        },
+      },
+    })
+    bridge.send({
+      method: 'item/completed',
+      params: {
+        turnId: 'turn-smoke-1',
+        item: {
+          type: 'agentMessage',
+          id: 'item-smoke-1',
+          text: '## Smoke Heading\n\n- markdown item',
+        },
+      },
+    })
+    bridge.send({
+      method: 'turn/completed',
+      params: {
+        turn: {
+          id: 'turn-smoke-1',
+          status: 'completed',
+        },
+      },
+    })
+
+    const assistantMarkdown = page.locator(
+      '[data-testid="timeline-item"][data-timeline-role="assistant"] [data-testid="timeline-message-markdown"]',
+    )
+    await expect(assistantMarkdown.locator('h2').last()).toHaveText('Smoke Heading')
+    await expect(assistantMarkdown.locator('ul li').last()).toHaveText('markdown item')
+
+    bridge.send({
+      id: 'approval-smoke-1',
+      method: 'item/commandExecution/requestApproval',
+      params: {
+        command: 'echo smoke',
+      },
+    })
+
+    await expect(page.locator('.approval-modal')).toBeVisible()
+    await expect(page.getByRole('button', { name: '許可する' })).toBeFocused()
+
+    await page.keyboard.press('Escape')
+
+    const cancelResponse = await bridge.waitForMessage(
+      (message) =>
+        message.id === 'approval-smoke-1' &&
+        isRecord(message.result) &&
+        message.result.decision === 'cancel',
+    )
+    expect(cancelResponse).toEqual({
+      id: 'approval-smoke-1',
+      result: {
+        decision: 'cancel',
+      },
+    })
+
+    await expect(page.locator('.approval-backdrop')).toHaveCount(0)
   })
 })

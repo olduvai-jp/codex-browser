@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { ref } from 'vue'
+import { nextTick, onMounted, ref, watch } from 'vue'
 import type {
   ExecutionModePreset,
   ExecutionModeRequirements,
@@ -37,9 +37,21 @@ const emit = defineEmits<{
   interrupt: []
 }>()
 
+const textareaRef = ref<HTMLTextAreaElement | null>(null)
+
+function resizeTextarea(element?: HTMLTextAreaElement | null): void {
+  const textarea = element ?? textareaRef.value
+  if (!textarea) {
+    return
+  }
+  textarea.style.height = 'auto'
+  textarea.style.height = `${textarea.scrollHeight}px`
+}
+
 function onInput(event: Event) {
   const target = event.target as HTMLTextAreaElement
   emit('update:modelValue', target.value)
+  resizeTextarea(target)
 }
 
 const isImeComposing = ref(false)
@@ -138,6 +150,19 @@ function onSaveExecutionModeConfig() {
   }
   emit('saveExecutionModeConfig')
 }
+
+watch(
+  () => props.modelValue,
+  async () => {
+    await nextTick()
+    resizeTextarea()
+  },
+)
+
+onMounted(async () => {
+  await nextTick()
+  resizeTextarea()
+})
 </script>
 
 <template>
@@ -148,6 +173,7 @@ function onSaveExecutionModeConfig() {
     <form class="mx-auto w-full max-w-[48rem]" @submit.prevent="emit('send')">
       <div class="rounded-2xl border border-composer-border bg-composer-bg p-3 shadow-sm">
         <textarea
+          ref="textareaRef"
           :value="props.modelValue"
           rows="1"
           placeholder="Codex にメッセージを送信..."

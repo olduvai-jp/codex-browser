@@ -1,7 +1,8 @@
 <script setup lang="ts">
-import { reactive, watch } from 'vue'
+import { onMounted, reactive, ref, watch } from 'vue'
 
 import type { ToolUserInputRequest } from '@/types'
+import { useModalFocusTrap } from '@/composables/useModalFocusTrap'
 
 type ToolUserInputAnswers = Record<string, { answers: string[] }>
 
@@ -16,6 +17,11 @@ const emit = defineEmits<{
 }>()
 
 const localAnswers = reactive<Record<string, string>>({})
+const modalRef = ref<HTMLElement | null>(null)
+const { focusInitialElement, handleModalKeydown } = useModalFocusTrap({
+  containerRef: modalRef,
+  onEscape: () => emit('cancel'),
+})
 
 watch(
   () => props.request,
@@ -29,6 +35,17 @@ watch(
     }
   },
   { immediate: true },
+)
+
+onMounted(() => {
+  void focusInitialElement()
+})
+
+watch(
+  () => props.request.id,
+  () => {
+    void focusInitialElement()
+  },
 )
 
 function buildAnswerPayload(): ToolUserInputAnswers {
@@ -50,7 +67,12 @@ function submitAnswers(): void {
 
 <template>
   <section class="tool-input-backdrop fixed inset-0 z-50 grid place-items-center bg-black/50 p-4 backdrop-blur-sm">
-    <article class="tool-input-modal flex w-full max-w-2xl flex-col gap-4 rounded-2xl border border-border-default bg-surface p-6 shadow-xl">
+    <article
+      ref="modalRef"
+      class="tool-input-modal flex w-full max-w-2xl flex-col gap-4 rounded-2xl border border-border-default bg-surface p-6 shadow-xl"
+      tabindex="-1"
+      @keydown="handleModalKeydown"
+    >
       <div class="flex items-center gap-3">
         <div class="flex h-10 w-10 shrink-0 items-center justify-center rounded-full bg-accent/10 text-accent">
           <svg xmlns="http://www.w3.org/2000/svg" class="h-5 w-5" viewBox="0 0 20 20" fill="currentColor">

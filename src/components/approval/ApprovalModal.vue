@@ -1,8 +1,10 @@
 <script setup lang="ts">
+import { onMounted, ref, watch } from 'vue'
 import type { ApprovalDecision, ApprovalMethodExplanation, ApprovalRequest } from '@/types'
 import { stringifyDetails } from '@/lib/formatters'
+import { useModalFocusTrap } from '@/composables/useModalFocusTrap'
 
-defineProps<{
+const props = defineProps<{
   approval: ApprovalRequest
   explanation: ApprovalMethodExplanation | null
   queueSize: number
@@ -11,11 +13,33 @@ defineProps<{
 const emit = defineEmits<{
   respond: [decision: ApprovalDecision]
 }>()
+
+const modalRef = ref<HTMLElement | null>(null)
+const { focusInitialElement, handleModalKeydown } = useModalFocusTrap({
+  containerRef: modalRef,
+  onEscape: () => emit('respond', 'cancel'),
+})
+
+onMounted(() => {
+  void focusInitialElement()
+})
+
+watch(
+  () => props.approval.id,
+  () => {
+    void focusInitialElement()
+  },
+)
 </script>
 
 <template>
   <section class="approval-backdrop fixed inset-0 z-50 grid place-items-center bg-black/50 p-4 backdrop-blur-sm">
-    <article class="approval-modal flex w-full max-w-2xl flex-col gap-4 rounded-2xl border border-border-default bg-surface p-6 shadow-xl">
+    <article
+      ref="modalRef"
+      class="approval-modal flex w-full max-w-2xl flex-col gap-4 rounded-2xl border border-border-default bg-surface p-6 shadow-xl"
+      tabindex="-1"
+      @keydown="handleModalKeydown"
+    >
       <div class="flex items-center gap-3">
         <div class="flex h-10 w-10 shrink-0 items-center justify-center rounded-full bg-warning/10 text-warning">
           <svg xmlns="http://www.w3.org/2000/svg" class="h-5 w-5" viewBox="0 0 20 20" fill="currentColor">
@@ -26,18 +50,18 @@ const emit = defineEmits<{
       </div>
 
       <p class="approval-intent text-sm font-semibold text-text-primary" data-testid="approval-intent">
-        {{ explanation?.intent }}
+        {{ props.explanation?.intent }}
       </p>
       <p class="approval-impact text-sm text-text-secondary" data-testid="approval-impact">
-        {{ explanation?.impact }}
+        {{ props.explanation?.impact }}
       </p>
 
       <div class="flex flex-wrap gap-x-4 gap-y-1 text-xs text-text-tertiary">
-        <p><span class="font-medium">Method:</span> <code class="font-mono">{{ approval.method }}</code></p>
-        <p><span class="font-medium">Request ID:</span> <code class="font-mono">{{ String(approval.id) }}</code></p>
+        <p><span class="font-medium">Method:</span> <code class="font-mono">{{ props.approval.method }}</code></p>
+        <p><span class="font-medium">Request ID:</span> <code class="font-mono">{{ String(props.approval.id) }}</code></p>
       </div>
 
-      <pre class="max-h-48 overflow-auto rounded-xl border border-border-default bg-surface-secondary p-3 font-mono text-xs text-text-secondary">{{ stringifyDetails(approval.params) }}</pre>
+      <pre class="max-h-48 overflow-auto rounded-xl border border-border-default bg-surface-secondary p-3 font-mono text-xs text-text-secondary">{{ stringifyDetails(props.approval.params) }}</pre>
 
       <div class="flex gap-3">
         <button
@@ -60,8 +84,8 @@ const emit = defineEmits<{
         </button>
       </div>
 
-      <p v-if="queueSize > 1" class="text-center text-xs text-text-tertiary">
-        残り {{ queueSize - 1 }} 件の承認リクエストがあります。
+      <p v-if="props.queueSize > 1" class="text-center text-xs text-text-tertiary">
+        残り {{ props.queueSize - 1 }} 件の承認リクエストがあります。
       </p>
     </article>
   </section>

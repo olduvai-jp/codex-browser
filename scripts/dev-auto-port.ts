@@ -67,24 +67,67 @@ async function main(): Promise<void> {
   const bridgeHost = process.env.BRIDGE_HOST?.trim() || DEFAULT_BRIDGE_HOST
   const rawBridgePort = process.env.BRIDGE_PORT?.trim()
   const explicitBridgePort = rawBridgePort ? parsePort(rawBridgePort, 'BRIDGE_PORT') : undefined
+  const forwardedFrontendArgs = process.argv.slice(2)
 
   const bridgePort = await resolveBridgePort(bridgeHost, explicitBridgePort)
   const npmCommand = process.platform === 'win32' ? 'npm.cmd' : 'npm'
-  const child = spawn(npmCommand, ['run', 'dev:all'], {
+  const childEnv = {
+    ...process.env,
+    BRIDGE_PORT: String(bridgePort),
+    BRIDGE_HOST: bridgeHost,
+  }
+  const backendChild = spawn(npmCommand, ['run', 'dev:backend'], {
     stdio: 'inherit',
-    env: {
-      ...process.env,
-      BRIDGE_PORT: String(bridgePort),
-      BRIDGE_HOST: bridgeHost,
-    },
+    env: childEnv,
+  })
+  const frontendArgs = ['run', 'dev:frontend']
+  if (forwardedFrontendArgs.length > 0) {
+    frontendArgs.push('--', ...forwardedFrontendArgs)
+  }
+  const frontendChild = spawn(npmCommand, frontendArgs, {
+    stdio: 'inherit',
+    env: childEnv,
   })
 
   console.log(`[dev-auto-port] BRIDGE_HOST=${bridgeHost} BRIDGE_PORT=${bridgePort}`)
+  if (forwardedFrontendArgs.length > 0) {
+    console.log(`[dev-auto-port] forwarding frontend args: ${forwardedFrontendArgs.join(' ')}`)
+  }
+
+  const children = [backendChild, frontendChild]
+  let shuttingDown = false
+  let exitCode = 0
+  let exitSignal: NodeJS.Signals | null = null
+
+  const maybeExit = (): void => {
+    if (children.some((child) => child.exitCode === null && child.signalCode === null)) {
+      return
+    }
+
+    if (exitSignal) {
+      process.kill(process.pid, exitSignal)
+      return
+    }
+
+    process.exit(exitCode)
+  }
+
+  const stopChildren = (signal?: NodeJS.Signals): void => {
+    if (shuttingDown) {
+      return
+    }
+    shuttingDown = true
+
+    for (const child of children) {
+      if (!child.killed && child.exitCode === null && child.signalCode === null) {
+        child.kill(signal)
+      }
+    }
+  }
 
   const forwardSignal = (signal: NodeJS.Signals): void => {
-    if (!child.killed) {
-      child.kill(signal)
-    }
+    exitSignal = signal
+    stopChildren(signal)
   }
 
   process.on('SIGINT', () => {
@@ -94,18 +137,28 @@ async function main(): Promise<void> {
     forwardSignal('SIGTERM')
   })
 
-  child.on('error', (error) => {
-    console.error(`[dev-auto-port] failed to start child process: ${error.message}`)
-    process.exit(1)
-  })
+  for (const child of children) {
+    child.on('error', (error) => {
+      console.error(`[dev-auto-port] failed to start child process: ${error.message}`)
+      exitCode = 1
+      stopChildren()
+      maybeExit()
+    })
 
-  child.on('exit', (code, signal) => {
-    if (signal) {
-      process.kill(process.pid, signal)
-      return
-    }
-    process.exit(code ?? 0)
-  })
+    child.on('exit', (code, signal) => {
+      if (!shuttingDown) {
+        exitCode = code ?? 0
+        exitSignal = signal
+        stopChildren(signal ?? undefined)
+      } else if (exitCode === 0 && typeof code === 'number' && code !== 0) {
+        exitCode = code
+      } else if (!exitSignal && signal) {
+        exitSignal = signal
+      }
+
+      maybeExit()
+    })
+  }
 }
 
 void main().catch((error) => {

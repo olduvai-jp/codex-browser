@@ -404,59 +404,37 @@ function renderMessageContent(message: UiMessage): string {
         <!-- Message -->
         <template v-if="entry.kind === 'message'">
           <div
-            class="flex"
-            :class="isContinuation(idx)
-              ? 'gap-4 pl-11 pt-0.5'
-              : 'gap-4 py-6'"
+            class="flex flex-col"
+            :class="[
+              entry.message.role === 'user' ? 'items-end' : 'items-start',
+              isContinuation(idx) ? 'pt-0.5' : 'py-1.5 md:py-3',
+            ]"
           >
-            <!-- Avatar (hidden for consecutive assistant messages) -->
+            <!-- Metadata row -->
             <div
-              v-if="!isContinuation(idx)"
-              class="flex h-7 w-7 shrink-0 items-center justify-center rounded-full text-xs font-semibold"
+              v-if="!isContinuation(idx) && (entry.message.streaming || formatTime(entry.message.createdAt))"
+              class="flex items-center gap-1.5 px-1 pb-0.5"
+            >
+              <span v-if="entry.message.streaming" class="text-[11px] font-medium text-accent">生成中...</span>
+              <span v-if="formatTime(entry.message.createdAt)" class="text-[11px] text-text-muted">{{ formatTime(entry.message.createdAt) }}</span>
+            </div>
+            <!-- Bubble -->
+            <div
+              class="max-w-[85%] rounded-2xl px-3.5 py-2 md:max-w-[75%]"
               :class="entry.message.role === 'user'
-                ? 'bg-accent text-white'
+                ? 'bg-accent text-white [&_a]:text-white [&_a]:underline [&_code]:text-white/90 [&_pre]:bg-white/10 [&_pre]:text-white/90'
                 : entry.message.role === 'assistant'
-                  ? 'bg-surface-tertiary text-text-secondary'
+                  ? 'bg-surface-secondary text-text-primary'
                   : 'bg-surface-secondary text-text-muted'"
             >
-              <template v-if="entry.message.role === 'user'">
-                <svg xmlns="http://www.w3.org/2000/svg" class="h-4 w-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-                  <path d="M19 21v-2a4 4 0 0 0-4-4H9a4 4 0 0 0-4 4v2" />
-                  <circle cx="12" cy="7" r="4" />
-                </svg>
-              </template>
-              <template v-else-if="entry.message.role === 'assistant'">
-                <svg xmlns="http://www.w3.org/2000/svg" class="h-4 w-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-                  <path d="M12 3v2m0 14v2M5.636 5.636l1.414 1.414m9.9 9.9 1.414 1.414M3 12h2m14 0h2M5.636 18.364l1.414-1.414m9.9-9.9 1.414-1.414" />
-                  <circle cx="12" cy="12" r="4" />
-                </svg>
-              </template>
-              <template v-else>
-                <svg xmlns="http://www.w3.org/2000/svg" class="h-4 w-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-                  <circle cx="12" cy="12" r="10" />
-                  <line x1="12" y1="16" x2="12" y2="12" />
-                  <line x1="12" y1="8" x2="12.01" y2="8" />
-                </svg>
-              </template>
-            </div>
-            <!-- Content -->
-            <div class="min-w-0 flex-1">
-              <div v-if="!isContinuation(idx)" class="flex items-center gap-2">
-                <p class="text-sm font-semibold text-text-primary">
-                  {{ entry.message.role === 'user' ? 'あなた' : entry.message.role === 'assistant' ? 'Codex' : 'システム' }}
-                </p>
-                <span v-if="entry.message.streaming" class="text-[11px] font-medium text-accent">生成中...</span>
-                <span v-if="formatTime(entry.message.createdAt)" class="text-[11px] text-text-muted">{{ formatTime(entry.message.createdAt) }}</span>
-              </div>
               <p
                 v-if="shouldShowSummary(entry.message)"
-                class="assistant-summary mt-1 whitespace-pre-wrap break-words text-sm leading-6 text-text-tertiary"
+                class="assistant-summary whitespace-pre-wrap break-words text-sm leading-6 text-text-tertiary"
               >
                 {{ entry.message.summaryText }}
               </p>
               <div
-                class="break-words text-[15px] leading-7 text-text-primary [&_a]:underline [&_code]:font-mono [&_ol]:list-decimal [&_ol]:pl-6 [&_pre]:my-2 [&_pre]:overflow-x-auto [&_pre]:rounded-lg [&_pre]:bg-surface-secondary [&_pre]:p-3 [&_pre]:font-mono [&_pre]:text-xs [&_ul]:list-disc [&_ul]:pl-6"
-                :class="isContinuation(idx) ? '' : 'mt-1'"
+                class="break-words text-[15px] leading-7 [&_a]:underline [&_code]:font-mono [&_ol]:list-decimal [&_ol]:pl-6 [&_pre]:my-2 [&_pre]:overflow-x-auto [&_pre]:rounded-lg [&_pre]:p-3 [&_pre]:font-mono [&_pre]:text-xs [&_ul]:list-disc [&_ul]:pl-6"
                 data-testid="timeline-message-markdown"
                 v-html="renderMessageContent(entry.message)"
               />
@@ -466,7 +444,7 @@ function renderMessageContent(message: UiMessage): string {
 
         <!-- Tool call -->
         <template v-else-if="entry.kind === 'tool'">
-          <div class="py-1 pl-11">
+          <div class="py-1 pl-2">
             <button
               type="button"
               class="flex max-w-full items-center gap-2 rounded-lg px-2 py-1.5 text-sm text-text-secondary transition-colors hover:bg-surface-secondary"
@@ -509,7 +487,7 @@ function renderMessageContent(message: UiMessage): string {
 
         <!-- Turn status -->
         <template v-else-if="entry.kind === 'turnStatus'">
-          <div class="flex items-center gap-2 py-2 pl-11 text-xs text-text-muted">
+          <div class="flex items-center gap-2 py-2 pl-6 text-xs text-text-muted md:pl-11">
             <span class="h-1.5 w-1.5 shrink-0 rounded-full" :class="turnStateClass(entry.status)" />
             <span>{{ turnStatusDescription(entry.status, entry.label) }}</span>
             <span v-if="formatTime(entry.occurredAt)">{{ formatTime(entry.occurredAt) }}</span>
@@ -518,7 +496,7 @@ function renderMessageContent(message: UiMessage): string {
 
         <!-- Approval -->
         <template v-else-if="entry.kind === 'approval'">
-          <div class="py-2 pl-11">
+          <div class="py-2 pl-2">
             <div class="rounded-xl border border-warning/30 bg-warning/5 p-4">
               <div class="flex items-center gap-2">
                 <svg xmlns="http://www.w3.org/2000/svg" class="h-4 w-4 shrink-0 text-warning" viewBox="0 0 20 20" fill="currentColor">
@@ -546,7 +524,7 @@ function renderMessageContent(message: UiMessage): string {
 
         <!-- Tool user input -->
         <template v-else-if="entry.kind === 'toolUserInput'">
-          <div class="py-2 pl-11">
+          <div class="py-2 pl-2">
             <div class="rounded-xl border border-accent/30 bg-accent/5 p-4">
               <div class="flex items-center gap-2">
                 <svg xmlns="http://www.w3.org/2000/svg" class="h-4 w-4 shrink-0 text-accent" viewBox="0 0 20 20" fill="currentColor">

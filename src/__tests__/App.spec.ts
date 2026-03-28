@@ -2172,7 +2172,6 @@ describe('App.vue ui phase-1 flows', () => {
     expect((wrapper.get('select[data-testid="execution-mode-select"]').element as HTMLSelectElement).value).toBe(
       'full-auto',
     )
-    expect(getByTestId(wrapper, 'execution-mode-current-label').text()).toContain('full-auto')
     expect(
       wrapper
         .get('select[data-testid="execution-mode-select"]')

@@ -102,45 +102,49 @@ onMounted(() => {
 </script>
 
 <template>
-  <div class="flex h-screen bg-chat-bg text-text-primary">
+  <div class="safe-area-top flex h-dvh bg-chat-bg text-text-primary">
     <!-- Sidebar -->
-    <div
-      v-if="sidebarOpen"
-      id="thread-sidebar"
-      class="flex w-[260px] shrink-0 flex-col bg-sidebar-bg transition-all duration-200 max-md:fixed max-md:inset-y-0 max-md:left-0 max-md:z-40 max-md:shadow-lg"
-    >
-      <ThreadSidebar
-        :workspace-groups="workspaceHistoryGroups"
-        :selected-thread-id="selectedHistoryThreadId"
-        :active-thread-id="activeThreadId"
-        :can-refresh="isConnected && initialized"
-        :history-show-all="historyShowAll"
-        :history-loading="historyLoading"
-        :can-load-more-history="historyCanLoadMore"
-        :is-turn-active="isTurnActive"
-        :advanced-panel-open="advancedPanelOpen"
-        :is-connected="isConnected"
-        :connection-state="connectionState"
-        @refresh="loadThreadHistory"
-        @toggle-history-scope="toggleHistoryScope"
-        @load-more-history="loadMoreThreadHistory"
-        @open-thread="resumeThread($event)"
-        @new-thread="startThread()"
-        @new-thread-in-workspace="startThread($event)"
-        @open-workspace-picker="workspacePickerOpen = true"
-        @toggle-advanced-panel="advancedPanelOpen = !advancedPanelOpen"
-        @toggle-sidebar="sidebarOpen = false"
-        @connect="connect"
-        @disconnect="disconnect()"
-      />
-    </div>
+    <Transition name="sidebar-slide">
+      <div
+        v-if="sidebarOpen"
+        id="thread-sidebar"
+        class="flex w-[260px] shrink-0 flex-col bg-sidebar-bg transition-all duration-200 max-md:fixed max-md:inset-y-0 max-md:left-0 max-md:z-40 max-md:shadow-lg"
+      >
+        <ThreadSidebar
+          :workspace-groups="workspaceHistoryGroups"
+          :selected-thread-id="selectedHistoryThreadId"
+          :active-thread-id="activeThreadId"
+          :can-refresh="isConnected && initialized"
+          :history-show-all="historyShowAll"
+          :history-loading="historyLoading"
+          :can-load-more-history="historyCanLoadMore"
+          :is-turn-active="isTurnActive"
+          :advanced-panel-open="advancedPanelOpen"
+          :is-connected="isConnected"
+          :connection-state="connectionState"
+          @refresh="loadThreadHistory"
+          @toggle-history-scope="toggleHistoryScope"
+          @load-more-history="loadMoreThreadHistory"
+          @open-thread="resumeThread($event)"
+          @new-thread="startThread()"
+          @new-thread-in-workspace="startThread($event)"
+          @open-workspace-picker="workspacePickerOpen = true"
+          @toggle-advanced-panel="advancedPanelOpen = !advancedPanelOpen"
+          @toggle-sidebar="sidebarOpen = false"
+          @connect="connect"
+          @disconnect="disconnect()"
+        />
+      </div>
+    </Transition>
 
     <!-- Overlay for mobile sidebar -->
-    <div
-      v-if="sidebarOpen"
-      class="fixed inset-0 z-30 bg-black/30 md:hidden"
-      @click="sidebarOpen = false"
-    />
+    <Transition name="sidebar-overlay">
+      <div
+        v-if="sidebarOpen"
+        class="fixed inset-0 z-30 bg-black/30 md:hidden"
+        @click="sidebarOpen = false"
+      />
+    </Transition>
 
     <!-- Chat Area -->
     <div class="flex min-w-0 flex-1 flex-col bg-chat-bg">

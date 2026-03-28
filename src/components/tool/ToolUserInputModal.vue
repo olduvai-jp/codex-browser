@@ -101,23 +101,23 @@ function submitAnswers(): void {
             :data-testid="`tool-user-input-field-${question.id}`"
             rows="2"
             :placeholder="question.placeholder || '回答を入力してください'"
-            class="rounded-lg border border-border-default bg-surface-secondary px-3 py-2 text-sm text-text-primary placeholder:text-text-tertiary focus:border-accent focus:ring-1 focus:ring-accent focus:outline-none"
+            class="rounded-lg border border-border-default bg-surface-secondary px-3 py-2 text-base text-text-primary placeholder:text-text-tertiary focus:border-accent focus:ring-1 focus:ring-accent focus:outline-none"
           />
         </label>
       </div>
 
       <pre class="max-h-40 overflow-auto rounded-xl border border-border-default bg-surface-secondary p-3 font-mono text-xs text-text-secondary">{{ JSON.stringify(request.params, null, 2) }}</pre>
 
-      <div class="flex gap-3">
+      <div class="flex flex-col gap-2 md:flex-row md:gap-3">
         <button
-          class="flex-1 rounded-lg bg-accent px-4 py-2.5 text-sm font-medium text-white transition-colors hover:bg-accent-hover"
+          class="flex-1 rounded-lg bg-accent px-4 py-2.5 text-sm font-medium text-white transition-colors hover:bg-accent-hover max-md:py-3"
           data-testid="tool-user-input-submit"
           @click="submitAnswers"
         >
           送信する
         </button>
         <button
-          class="flex-1 rounded-lg border border-border-default bg-surface-secondary px-4 py-2.5 text-sm font-medium text-text-primary transition-colors hover:bg-surface-tertiary"
+          class="flex-1 rounded-lg border border-border-default bg-surface-secondary px-4 py-2.5 text-sm font-medium text-text-primary transition-colors hover:bg-surface-tertiary max-md:py-3"
           data-testid="tool-user-input-cancel"
           @click="emit('cancel')"
         >

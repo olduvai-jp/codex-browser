@@ -63,21 +63,21 @@ watch(
 
       <pre class="max-h-48 overflow-auto rounded-xl border border-border-default bg-surface-secondary p-3 font-mono text-xs text-text-secondary">{{ stringifyDetails(props.approval.params) }}</pre>
 
-      <div class="flex gap-3">
+      <div class="flex flex-col gap-2 md:flex-row md:gap-3">
         <button
-          class="flex-1 rounded-lg bg-success px-4 py-2.5 text-sm font-medium text-white transition-colors hover:bg-success/90"
+          class="flex-1 rounded-lg bg-success px-4 py-2.5 text-sm font-medium text-white transition-colors hover:bg-success/90 max-md:py-3"
           @click="emit('respond', 'accept')"
         >
           許可する
         </button>
         <button
-          class="flex-1 rounded-lg bg-warning px-4 py-2.5 text-sm font-medium text-white transition-colors hover:bg-warning/90"
+          class="flex-1 rounded-lg bg-warning px-4 py-2.5 text-sm font-medium text-white transition-colors hover:bg-warning/90 max-md:py-3"
           @click="emit('respond', 'decline')"
         >
           拒否する
         </button>
         <button
-          class="flex-1 rounded-lg bg-danger px-4 py-2.5 text-sm font-medium text-white transition-colors hover:bg-danger/90"
+          class="flex-1 rounded-lg bg-danger px-4 py-2.5 text-sm font-medium text-white transition-colors hover:bg-danger/90 max-md:py-3"
           @click="emit('respond', 'cancel')"
         >
           キャンセル

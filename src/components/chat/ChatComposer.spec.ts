@@ -142,7 +142,6 @@ describe('ChatComposer', () => {
       selectedExecutionModePreset: 'custom',
     })
 
-    expect(wrapper.get('[data-testid="execution-mode-current-label"]').text()).toContain('現在: custom')
     expect(wrapper.get('[data-testid="execution-mode-save-button"]').attributes('disabled')).toBeDefined()
   })
 

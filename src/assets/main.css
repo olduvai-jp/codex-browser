@@ -31,6 +31,36 @@
   --color-composer-border: #e0e0e0;
 }
 
+/* Safe area insets for notched devices */
+.safe-area-top {
+  padding-top: env(safe-area-inset-top);
+}
+.safe-area-bottom {
+  padding-bottom: env(safe-area-inset-bottom);
+}
+
+/* Sidebar slide animation (mobile only) */
+@media (max-width: 767px) {
+  .sidebar-slide-enter-active,
+  .sidebar-slide-leave-active {
+    transition: transform 200ms ease;
+  }
+  .sidebar-slide-enter-from,
+  .sidebar-slide-leave-to {
+    transform: translateX(-100%);
+  }
+}
+
+/* Sidebar overlay fade */
+.sidebar-overlay-enter-active,
+.sidebar-overlay-leave-active {
+  transition: opacity 200ms ease;
+}
+.sidebar-overlay-enter-from,
+.sidebar-overlay-leave-to {
+  opacity: 0;
+}
+
 @variant dark {
   @theme {
     --color-surface: #212121;

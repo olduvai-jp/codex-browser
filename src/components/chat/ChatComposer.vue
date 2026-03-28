@@ -138,6 +138,10 @@ function canSaveExecutionModeConfig(): boolean {
     return false
   }
 
+  if (props.selectedExecutionModePreset === props.currentExecutionModePreset) {
+    return false
+  }
+
   return isExecutionModePresetAllowed(props.selectedExecutionModePreset)
 }
 
@@ -166,7 +170,7 @@ onMounted(async () => {
 </script>
 
 <template>
-  <div class="relative px-4 pb-6 pt-2">
+  <div class="safe-area-bottom relative px-4 pb-6 pt-2">
     <!-- Gradient fade -->
     <div class="pointer-events-none absolute bottom-full left-0 right-0 h-8 bg-gradient-to-t from-chat-bg to-transparent" />
 
@@ -178,18 +182,18 @@ onMounted(async () => {
           rows="1"
           placeholder="Codex にメッセージを送信..."
           :disabled="props.disabled"
-          class="min-h-[52px] w-full resize-none border-none bg-transparent px-1 py-1 text-sm leading-relaxed text-text-primary placeholder:text-text-muted focus:outline-none disabled:cursor-not-allowed disabled:text-text-muted"
+          class="min-h-[52px] w-full resize-none border-none bg-transparent px-1 py-1 text-base leading-relaxed text-text-primary placeholder:text-text-muted focus:outline-none disabled:cursor-not-allowed disabled:text-text-muted"
           @input="onInput"
           @compositionstart="onCompositionStart"
           @compositionend="onCompositionEnd"
           @keydown.enter.exact="onEnterKeydown"
         />
-        <div class="flex items-center gap-1.5 pt-1">
+        <div class="flex flex-wrap items-center gap-1.5 pt-1">
           <div class="relative min-w-0">
             <select
               :value="props.selectedModelId"
               data-testid="model-select"
-              class="h-7 max-w-[12rem] appearance-none rounded-lg border-none bg-transparent py-0 pl-2 pr-5 text-xs text-text-muted hover:bg-sidebar-hover focus:outline-none disabled:cursor-not-allowed disabled:opacity-50"
+              class="h-7 max-w-[7rem] appearance-none rounded-lg border-none bg-transparent py-0 pl-2 pr-5 text-xs text-text-muted hover:bg-sidebar-hover focus:outline-none disabled:cursor-not-allowed disabled:opacity-50 md:max-w-[12rem]"
               :disabled="props.settingsDisabled"
               @change="onModelChange"
             >
@@ -203,7 +207,7 @@ onMounted(async () => {
             <select
               :value="props.selectedThinkingEffort"
               data-testid="thinking-effort-select"
-              class="h-7 max-w-[6.25rem] appearance-none rounded-lg border-none bg-transparent py-0 pl-2 pr-5 text-xs text-text-muted hover:bg-sidebar-hover focus:outline-none disabled:cursor-not-allowed disabled:opacity-50"
+              class="h-7 max-w-[5rem] appearance-none rounded-lg border-none bg-transparent py-0 pl-2 pr-5 text-xs text-text-muted hover:bg-sidebar-hover focus:outline-none disabled:cursor-not-allowed disabled:opacity-50 md:max-w-[6.25rem]"
               :disabled="props.settingsDisabled"
               @change="onThinkingChange"
             >
@@ -218,7 +222,7 @@ onMounted(async () => {
             <select
               :value="getExecutionModeSelectValue()"
               data-testid="execution-mode-select"
-              class="h-7 max-w-[8.6rem] appearance-none rounded-lg border-none bg-transparent py-0 pl-2 pr-5 text-xs text-text-muted hover:bg-sidebar-hover focus:outline-none disabled:cursor-not-allowed disabled:opacity-50"
+              class="h-7 max-w-[6rem] appearance-none rounded-lg border-none bg-transparent py-0 pl-2 pr-5 text-xs text-text-muted hover:bg-sidebar-hover focus:outline-none disabled:cursor-not-allowed disabled:opacity-50 md:max-w-[8.6rem]"
               :disabled="props.settingsDisabled || props.executionModeSaving"
               @change="onExecutionModePresetChange"
             >
@@ -236,12 +240,6 @@ onMounted(async () => {
             </select>
             <span class="pointer-events-none absolute right-1.5 top-1/2 -translate-y-1/2 text-[10px] text-text-muted">&#9662;</span>
           </div>
-          <p
-            class="min-w-0 text-[11px] leading-4 text-text-muted"
-            data-testid="execution-mode-current-label"
-          >
-            現在: {{ getExecutionModePresetLabel(props.currentExecutionModePreset) }}
-          </p>
           <button
             class="rounded-lg border border-text-muted bg-surface px-2 py-1 text-xs font-semibold text-text-muted transition-colors hover:bg-sidebar-hover focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus-ring/50 disabled:cursor-not-allowed disabled:opacity-30"
             data-testid="execution-mode-save-button"
@@ -251,7 +249,7 @@ onMounted(async () => {
           >
             {{ props.executionModeSaving ? '保存中...' : '保存' }}
           </button>
-          <div class="ml-auto flex items-center gap-2">
+          <div class="ml-auto flex items-center gap-2 max-md:ml-0 max-md:w-full max-md:justify-end max-md:pt-1">
             <button
               v-if="props.canInterrupt"
               class="rounded-full border border-warning/40 bg-warning/10 px-3 py-1.5 text-xs font-semibold text-warning transition-colors hover:border-warning/60 hover:bg-warning/20 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-warning/40"
@@ -262,13 +260,13 @@ onMounted(async () => {
               中断
             </button>
             <button
-              class="inline-flex h-8 w-8 items-center justify-center rounded-lg bg-text-primary text-surface transition-colors hover:opacity-80 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus-ring/50 disabled:cursor-not-allowed disabled:opacity-30"
+              class="inline-flex h-10 w-10 items-center justify-center rounded-lg bg-text-primary text-surface transition-colors hover:opacity-80 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus-ring/50 disabled:cursor-not-allowed disabled:opacity-30 md:h-8 md:w-8"
               data-testid="send-turn-button"
               type="submit"
               :disabled="!props.canSend"
               aria-label="送信"
             >
-              <svg viewBox="0 0 24 24" class="h-4 w-4" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true">
+              <svg viewBox="0 0 24 24" class="h-5 w-5 md:h-4 md:w-4" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true">
                 <path d="M12 5v14" />
                 <path d="m6 11 6-6 6 6" />
               </svg>

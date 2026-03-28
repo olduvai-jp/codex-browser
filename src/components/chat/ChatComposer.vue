@@ -176,18 +176,47 @@ onMounted(async () => {
 
     <form class="mx-auto w-full max-w-[48rem]" @submit.prevent="emit('send')">
       <div class="rounded-2xl border border-composer-border bg-composer-bg p-3 shadow-sm">
-        <textarea
-          ref="textareaRef"
-          :value="props.modelValue"
-          rows="1"
-          placeholder="Codex にメッセージを送信..."
-          :disabled="props.disabled"
-          class="min-h-[52px] w-full resize-none border-none bg-transparent px-1 py-1 text-base leading-relaxed text-text-primary placeholder:text-text-muted focus:outline-none disabled:cursor-not-allowed disabled:text-text-muted"
-          @input="onInput"
-          @compositionstart="onCompositionStart"
-          @compositionend="onCompositionEnd"
-          @keydown.enter.exact="onEnterKeydown"
-        />
+        <!-- Input row: textarea + send button -->
+        <div class="flex items-end gap-2">
+          <textarea
+            ref="textareaRef"
+            :value="props.modelValue"
+            rows="1"
+            placeholder="Codex にメッセージを送信..."
+            :disabled="props.disabled"
+            class="min-h-[40px] flex-1 resize-none border-none bg-transparent px-1 py-1 text-base leading-relaxed text-text-primary placeholder:text-text-muted focus:outline-none disabled:cursor-not-allowed disabled:text-text-muted"
+            @input="onInput"
+            @compositionstart="onCompositionStart"
+            @compositionend="onCompositionEnd"
+            @keydown.enter.exact="onEnterKeydown"
+          />
+          <button
+            v-if="props.canInterrupt"
+            class="mb-1 inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-text-primary text-surface transition-colors hover:opacity-80 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus-ring/50"
+            data-testid="interrupt-turn-button"
+            type="button"
+            :aria-label="'中断'"
+            @click="emit('interrupt')"
+          >
+            <svg viewBox="0 0 24 24" class="h-3.5 w-3.5" fill="currentColor" aria-hidden="true">
+              <rect x="6" y="6" width="12" height="12" rx="2" />
+            </svg>
+          </button>
+          <button
+            v-else
+            class="mb-1 inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-text-primary text-surface transition-colors hover:opacity-80 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus-ring/50 disabled:cursor-not-allowed disabled:opacity-30"
+            data-testid="send-turn-button"
+            type="submit"
+            :disabled="!props.canSend"
+            aria-label="送信"
+          >
+            <svg viewBox="0 0 24 24" class="h-4 w-4" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true">
+              <path d="M12 5v14" />
+              <path d="m6 11 6-6 6 6" />
+            </svg>
+          </button>
+        </div>
+        <!-- Parameters row -->
         <div class="flex flex-wrap items-center gap-1.5 pt-1">
           <div class="relative min-w-0">
             <select
@@ -249,29 +278,6 @@ onMounted(async () => {
           >
             {{ props.executionModeSaving ? '保存中...' : '保存' }}
           </button>
-          <div class="ml-auto flex items-center gap-2 max-md:ml-0 max-md:w-full max-md:justify-end max-md:pt-1">
-            <button
-              v-if="props.canInterrupt"
-              class="rounded-full border border-warning/40 bg-warning/10 px-3 py-1.5 text-xs font-semibold text-warning transition-colors hover:border-warning/60 hover:bg-warning/20 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-warning/40"
-              data-testid="interrupt-turn-button"
-              type="button"
-              @click="emit('interrupt')"
-            >
-              中断
-            </button>
-            <button
-              class="inline-flex h-10 w-10 items-center justify-center rounded-lg bg-text-primary text-surface transition-colors hover:opacity-80 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus-ring/50 disabled:cursor-not-allowed disabled:opacity-30 md:h-8 md:w-8"
-              data-testid="send-turn-button"
-              type="submit"
-              :disabled="!props.canSend"
-              aria-label="送信"
-            >
-              <svg viewBox="0 0 24 24" class="h-5 w-5 md:h-4 md:w-4" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true">
-                <path d="M12 5v14" />
-                <path d="m6 11 6-6 6 6" />
-              </svg>
-            </button>
-          </div>
         </div>
       </div>
 

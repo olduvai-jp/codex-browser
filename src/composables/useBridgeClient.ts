@@ -70,6 +70,7 @@ const REASONING_EFFORT_SET = new Set<string>(REASONING_EFFORT_VALUES)
 const APPROVAL_POLICY_SET = new Set<string>(APPROVAL_POLICY_VALUES)
 const SANDBOX_MODE_SET = new Set<string>(SANDBOX_MODE_VALUES)
 const UNKNOWN_WORKSPACE_LABEL = '(unknown workspace)'
+const CODEX_APP_UNTITLED_CONVERSATION_TITLE = 'Untitled conversation'
 const UUID_STRING_PATTERN = /^(?:[0-9a-f]{32}|[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})$/i
 const MAX_TITLE_CANDIDATE_LENGTH = 120
 const DEFAULT_EXECUTION_MODE_PRESET = 'default' as const
@@ -83,6 +84,16 @@ type ToolUserInputAnswers = Record<string, { answers: string[] }>
 type TimelineTurnStatusEntry = Omit<TimelineTurnStatusItem, 'kind'>
 type TimelineApprovalEntry = Omit<TimelineApprovalItem, 'kind'>
 type TimelineToolUserInputEntry = Omit<TimelineToolUserInputItem, 'kind'>
+type CodexAppHistoryUpsertPayload = {
+  threadId: string
+  title: string
+  updatedAt: string
+  workspaceRootHint?: string
+}
+type CodexAppOverlayEntry = ThreadHistoryEntry & {
+  updatedAt: string
+  scopeCwd?: string
+}
 const HISTORY_DISPLAY_MODE_SET = new Set<HistoryDisplayMode>(['native', 'codex-app'])
 
 function isReasoningEffort(value: string): value is ReasoningEffort {
@@ -178,6 +189,25 @@ function isPathBoundaryPrefix(prefix: string, target: string): boolean {
   }
 
   return normalizedTarget.startsWith(`${normalizedPrefix}/`)
+}
+
+function findBestMatchingRoot(path: string, roots: string[]): string | null {
+  const normalizedPath = normalizePath(path)
+  if (normalizedPath.length === 0) {
+    return null
+  }
+
+  let bestMatch: string | null = null
+  for (const root of roots) {
+    if (!isPathBoundaryPrefix(root, normalizedPath)) {
+      continue
+    }
+    if (!bestMatch || normalizePath(root).length > normalizePath(bestMatch).length) {
+      bestMatch = normalizePath(root)
+    }
+  }
+
+  return bestMatch
 }
 
 function pickStringArray(value: unknown): string[] {
@@ -320,6 +350,75 @@ function compareCodexAppHistoryEntries(left: ThreadHistoryEntry, right: ThreadHi
 
 function sortCodexAppHistoryEntries(entries: ThreadHistoryEntry[]): ThreadHistoryEntry[] {
   return [...entries].sort(compareCodexAppHistoryEntries)
+}
+
+function filterCodexAppOverlayEntriesByScope(
+  entries: CodexAppOverlayEntry[],
+  showAll: boolean,
+  bridgeCwd: string,
+  roots: CodexAppProjectRootsSnapshot,
+): CodexAppOverlayEntry[] {
+  if (showAll) {
+    return [...entries]
+  }
+
+  const normalizedBridgeCwd = bridgeCwd.trim()
+  if (normalizedBridgeCwd.length === 0) {
+    return [...entries]
+  }
+
+  const resolvedBridgeCwd = normalizePath(normalizedBridgeCwd)
+  const workspaceRoot =
+    findBestMatchingRoot(resolvedBridgeCwd, roots.activeRoots) ??
+    findBestMatchingRoot(resolvedBridgeCwd, roots.savedRoots)
+  if (workspaceRoot) {
+    return entries.filter((entry) => {
+      const overlayWorkspaceRoot = entry.workspaceRoot?.trim()
+      if (overlayWorkspaceRoot && overlayWorkspaceRoot.length > 0) {
+        return normalizePath(overlayWorkspaceRoot) === workspaceRoot
+      }
+
+      const overlayScopeCwd = entry.scopeCwd?.trim()
+      if (!overlayScopeCwd || overlayScopeCwd.length === 0) {
+        return false
+      }
+      return isPathBoundaryPrefix(workspaceRoot, normalizePath(overlayScopeCwd))
+    })
+  }
+
+  return entries.filter((entry) => {
+    const overlayScopeCwd = entry.scopeCwd?.trim()
+    if (!overlayScopeCwd || overlayScopeCwd.length === 0) {
+      return false
+    }
+    return normalizePath(overlayScopeCwd) === resolvedBridgeCwd
+  })
+}
+
+function mergeCodexAppHistoryEntries(
+  serverEntries: ThreadHistoryEntry[],
+  overlayEntries: CodexAppOverlayEntry[],
+): ThreadHistoryEntry[] {
+  const byId = new Map<string, ThreadHistoryEntry>()
+
+  for (const entry of serverEntries) {
+    byId.set(entry.id, entry)
+  }
+  for (const entry of overlayEntries) {
+    if (!byId.has(entry.id)) {
+      byId.set(entry.id, {
+        id: entry.id,
+        title: entry.title,
+        updatedAt: entry.updatedAt,
+        cwd: entry.cwd,
+        source: entry.source,
+        workspaceRoot: entry.workspaceRoot,
+        workspaceLabel: entry.workspaceLabel,
+      })
+    }
+  }
+
+  return sortCodexAppHistoryEntries([...byId.values()])
 }
 
 function resolveBridgeWsUrl(): string {
@@ -732,6 +831,8 @@ export function useBridgeClient() {
   const historyNextCursor = ref('')
   const historyLoading = ref(false)
   const historyTitleOverridesByThreadId = ref<Record<string, string>>({})
+  const codexAppServerHistoryEntries = ref<ThreadHistoryEntry[]>([])
+  const codexAppHistoryOverlayEntries = ref<CodexAppOverlayEntry[]>([])
   const codexAppHistoryEntries = ref<ThreadHistoryEntry[]>([])
   const codexAppRoots = ref<CodexAppProjectRootsSnapshot>({
     activeRoots: [],
@@ -766,6 +867,7 @@ export function useBridgeClient() {
   const approvalTimelineEntryIdByMetricKey = new Map<string, string>()
   const toolUserInputTimelineEntryIdByRequestKey = new Map<string, string>()
   const toolCallEntryIdByLookupKey = new Map<string, string>()
+  const codexAppPendingFirstTurnHistoryUpsertOverlayByThreadId = new Map<string, CodexAppOverlayEntry>()
 
   let uiMessageSequence = 1
   let logSequence = 1
@@ -951,6 +1053,22 @@ export function useBridgeClient() {
   })
   const currentToolUserInputRequest = computed(() => toolUserInputRequests.value[0] ?? null)
   const currentApproval = computed(() => approvals.value[0] ?? null)
+
+  watch(
+    () => ({
+      bridgeCwd: bridgeCwd.value,
+      showAll: codexAppHistoryShowAll.value,
+      activeRoots: codexAppRoots.value.activeRoots.join('|'),
+      savedRoots: codexAppRoots.value.savedRoots.join('|'),
+      labels: Object.entries(codexAppRoots.value.labels)
+        .sort((left, right) => left[0].localeCompare(right[0]))
+        .map(([key, value]) => `${key}:${value}`)
+        .join('|'),
+    }),
+    () => {
+      recomputeCodexAppHistoryEntries()
+    },
+  )
   const historyResumeSuccessRate = computed(() =>
     historyResumeAttemptCount.value === 0
       ? 0
@@ -1126,6 +1244,92 @@ export function useBridgeClient() {
       [normalizedThreadId]: titleCandidate,
     }
     replaceThreadHistoryTitleIfNeeded(normalizedThreadId, titleCandidate)
+  }
+
+  function resolveCodexAppWorkspaceRootHint(cwd?: string): string | undefined {
+    if (typeof cwd !== 'string') {
+      return undefined
+    }
+    const normalizedCwd = normalizePath(cwd)
+    if (normalizedCwd.length === 0) {
+      return undefined
+    }
+
+    const activeMatch = findBestMatchingRoot(normalizedCwd, codexAppRoots.value.activeRoots)
+    if (activeMatch) {
+      return activeMatch
+    }
+    const savedMatch = findBestMatchingRoot(normalizedCwd, codexAppRoots.value.savedRoots)
+    if (savedMatch) {
+      return savedMatch
+    }
+
+    return undefined
+  }
+
+  function recomputeCodexAppHistoryEntries(): void {
+    const scopedOverlayEntries = filterCodexAppOverlayEntriesByScope(
+      codexAppHistoryOverlayEntries.value,
+      codexAppHistoryShowAll.value,
+      bridgeCwd.value,
+      codexAppRoots.value,
+    )
+    codexAppHistoryEntries.value = mergeCodexAppHistoryEntries(
+      codexAppServerHistoryEntries.value,
+      scopedOverlayEntries,
+    )
+  }
+
+  function upsertCodexAppHistoryOverlayEntry(entry: CodexAppOverlayEntry): void {
+    const byId = new Map<string, CodexAppOverlayEntry>()
+    for (const current of codexAppHistoryOverlayEntries.value) {
+      byId.set(current.id, current)
+    }
+    byId.set(entry.id, entry)
+    codexAppHistoryOverlayEntries.value = [...byId.values()]
+    recomputeCodexAppHistoryEntries()
+  }
+
+  function removeCodexAppHistoryOverlayEntriesByIds(threadIds: Set<string>): void {
+    if (threadIds.size === 0) {
+      return
+    }
+
+    const nextOverlayEntries = codexAppHistoryOverlayEntries.value.filter((entry) => !threadIds.has(entry.id))
+    if (nextOverlayEntries.length === codexAppHistoryOverlayEntries.value.length) {
+      return
+    }
+    codexAppHistoryOverlayEntries.value = nextOverlayEntries
+    recomputeCodexAppHistoryEntries()
+  }
+
+  async function upsertCodexAppHistoryEntry(payload: CodexAppHistoryUpsertPayload): Promise<boolean> {
+    try {
+      const response = await fetch('/api/codex-app/history/upsert', {
+        method: 'POST',
+        headers: {
+          'content-type': 'application/json',
+        },
+        body: JSON.stringify(payload),
+      })
+      if (!response.ok) {
+        const body = await response.json().catch(() => ({}))
+        const detail = (body as Record<string, unknown>).error ?? response.statusText
+        pushLog('rpc', 'warn', `Codex.app history upsert failed: ${String(detail)}`, {
+          threadId: payload.threadId,
+        })
+        return false
+      }
+
+      await loadCodexAppHistory()
+      return true
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error)
+      pushLog('rpc', 'warn', `Codex.app history upsert error: ${message}`, {
+        threadId: payload.threadId,
+      })
+      return false
+    }
   }
 
   function makeApprovalMetricKey(id: JsonRpcId): string {
@@ -2426,9 +2630,12 @@ function parseToolUserInputQuestions(params: Record<string, unknown>): ToolUserI
     executionModeConfigVersion.value = ''
     isExecutionModeSaving.value = false
     bridgeCwd.value = ''
+    codexAppServerHistoryEntries.value = []
+    codexAppHistoryOverlayEntries.value = []
     codexAppHistoryEntries.value = []
     codexAppRoots.value = { activeRoots: [], savedRoots: [], labels: {} }
     codexAppHistoryGeneratedAt.value = ''
+    codexAppPendingFirstTurnHistoryUpsertOverlayByThreadId.clear()
     connectionState.value = 'disconnected'
   }
 
@@ -2605,6 +2812,35 @@ function parseToolUserInputQuestions(params: Record<string, unknown>): ToolUserI
         activeThreadId.value = nextThreadId
         resumeThreadId.value = nextThreadId
         readPreviewThreadId.value = ''
+        if (isCodexAppHistoryMode.value) {
+          const fallbackBridgeCwd = bridgeCwd.value.trim()
+          const historyCwd =
+            resolvedCwd && resolvedCwd.length > 0
+              ? resolvedCwd
+              : (fallbackBridgeCwd.length > 0 ? fallbackBridgeCwd : undefined)
+          const workspaceRootHint = resolveCodexAppWorkspaceRootHint(historyCwd)
+          const overlayEntry: CodexAppOverlayEntry = {
+            id: nextThreadId,
+            title: CODEX_APP_UNTITLED_CONVERSATION_TITLE,
+            updatedAt: new Date().toISOString(),
+            cwd: historyCwd,
+            workspaceRoot: workspaceRootHint,
+            workspaceLabel:
+              (workspaceRootHint
+                ? (codexAppRoots.value.labels[workspaceRootHint]?.trim() ?? workspaceRootHint.split('/').filter(Boolean).pop())
+                : (historyCwd?.split('/').filter(Boolean).pop())) || UNKNOWN_WORKSPACE_LABEL,
+            source: 'codex-app',
+            scopeCwd: historyCwd,
+          }
+          upsertCodexAppHistoryOverlayEntry(overlayEntry)
+          codexAppPendingFirstTurnHistoryUpsertOverlayByThreadId.set(nextThreadId, overlayEntry)
+          await upsertCodexAppHistoryEntry({
+            threadId: nextThreadId,
+            title: overlayEntry.title,
+            updatedAt: overlayEntry.updatedAt,
+            workspaceRootHint,
+          })
+        }
         pushLog('rpc', 'info', `thread/start completed: ${nextThreadId}`, response)
         clearUserGuidance()
       } else {
@@ -2674,7 +2910,8 @@ function parseToolUserInputQuestions(params: Record<string, unknown>): ToolUserI
           'warn',
           `Codex.app history fetch failed: ${(body as Record<string, unknown>).error ?? response.statusText}`,
         )
-        codexAppHistoryEntries.value = []
+        codexAppServerHistoryEntries.value = []
+        recomputeCodexAppHistoryEntries()
         selectedHistoryThreadId.value = ''
         historyNextCursor.value = ''
         return
@@ -2684,7 +2921,8 @@ function parseToolUserInputQuestions(params: Record<string, unknown>): ToolUserI
       const parsed = parseCodexAppHistoryResponse(payload)
       if (!parsed) {
         pushLog('rpc', 'warn', 'Codex.app history returned unexpected shape', payload as Record<string, unknown>)
-        codexAppHistoryEntries.value = []
+        codexAppServerHistoryEntries.value = []
+        recomputeCodexAppHistoryEntries()
         selectedHistoryThreadId.value = ''
         historyNextCursor.value = ''
         return
@@ -2693,17 +2931,19 @@ function parseToolUserInputQuestions(params: Record<string, unknown>): ToolUserI
       codexAppRoots.value = parsed.roots
       codexAppHistoryGeneratedAt.value = parsed.generatedAt ?? ''
       const sortedEntries = sortCodexAppHistoryEntries(parsed.entries)
-      codexAppHistoryEntries.value = sortedEntries
+      codexAppServerHistoryEntries.value = sortedEntries
+      removeCodexAppHistoryOverlayEntriesByIds(new Set(sortedEntries.map((entry) => entry.id)))
+      recomputeCodexAppHistoryEntries()
       historyNextCursor.value = ''
 
-      if (sortedEntries.length === 0) {
+      if (codexAppHistoryEntries.value.length === 0) {
         selectedHistoryThreadId.value = ''
-      } else if (!sortedEntries.some((entry) => entry.id === selectedHistoryThreadId.value)) {
-        selectedHistoryThreadId.value = sortedEntries[0]?.id ?? ''
+      } else if (!codexAppHistoryEntries.value.some((entry) => entry.id === selectedHistoryThreadId.value)) {
+        selectedHistoryThreadId.value = codexAppHistoryEntries.value[0]?.id ?? ''
       }
 
-      pushLog('rpc', 'info', `codex-app history loaded (${sortedEntries.length} threads)`, {
-        total: sortedEntries.length,
+      pushLog('rpc', 'info', `codex-app history loaded (${codexAppHistoryEntries.value.length} threads)`, {
+        total: codexAppHistoryEntries.value.length,
         showAll: codexAppHistoryShowAll.value,
         generatedAt: codexAppHistoryGeneratedAt.value || null,
       })
@@ -2969,6 +3209,38 @@ function parseToolUserInputQuestions(params: Record<string, unknown>): ToolUserI
 
       if (isRecord(response) && isRecord(response.turn) && typeof response.turn.id === 'string') {
         currentTurnId.value = response.turn.id
+        if (
+          isCodexAppHistoryMode.value &&
+          codexAppPendingFirstTurnHistoryUpsertOverlayByThreadId.has(threadId)
+        ) {
+          const pendingOverlayEntry = codexAppPendingFirstTurnHistoryUpsertOverlayByThreadId.get(threadId)
+          const fallbackBridgeCwd = bridgeCwd.value.trim()
+          const historyCwd = pendingOverlayEntry?.scopeCwd
+            ?? (fallbackBridgeCwd.length > 0 ? fallbackBridgeCwd : undefined)
+          const workspaceRootHint = resolveCodexAppWorkspaceRootHint(historyCwd)
+          const resolvedTitle = resolveTitleCandidateFromUserMessage(text) ?? CODEX_APP_UNTITLED_CONVERSATION_TITLE
+          const updatedOverlayEntry: CodexAppOverlayEntry = {
+            id: threadId,
+            title: resolvedTitle,
+            updatedAt: new Date().toISOString(),
+            cwd: historyCwd,
+            workspaceRoot: workspaceRootHint,
+            workspaceLabel:
+              (workspaceRootHint
+                ? (codexAppRoots.value.labels[workspaceRootHint]?.trim() ?? workspaceRootHint.split('/').filter(Boolean).pop())
+                : (historyCwd?.split('/').filter(Boolean).pop())) || UNKNOWN_WORKSPACE_LABEL,
+            source: 'codex-app',
+            scopeCwd: historyCwd,
+          }
+          upsertCodexAppHistoryOverlayEntry(updatedOverlayEntry)
+          codexAppPendingFirstTurnHistoryUpsertOverlayByThreadId.delete(threadId)
+          await upsertCodexAppHistoryEntry({
+            threadId,
+            title: updatedOverlayEntry.title,
+            updatedAt: updatedOverlayEntry.updatedAt,
+            workspaceRootHint,
+          })
+        }
         pushLog('rpc', 'info', `turn/start accepted: ${response.turn.id}`)
         clearUserGuidance()
         return

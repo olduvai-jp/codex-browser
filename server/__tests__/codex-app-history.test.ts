@@ -1,12 +1,12 @@
 // @vitest-environment node
 
-import { mkdtemp, mkdir, rm, writeFile } from 'node:fs/promises'
+import { mkdtemp, mkdir, readFile, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 
 import { afterEach, describe, expect, it } from 'vitest'
 
-import { listCodexAppHistory } from '../codex-app-history'
+import { listCodexAppHistory, upsertCodexAppHistoryEntry } from '../codex-app-history'
 
 const SESSION_IDS = {
   hint: '00000000-0000-0000-0000-000000000001',
@@ -229,5 +229,114 @@ describe('listCodexAppHistory', () => {
       cwd: '/plain/current',
     })
     expect(result.entries.map((entry) => entry.id)).toEqual([SESSION_IDS.cwd])
+  })
+
+  it('upserts session index rows and latest updated_at wins in reader output', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'codex-history-upsert-'))
+    tempDirs.push(root)
+    const codexHome = join(root, '.codex')
+    await mkdir(codexHome, { recursive: true })
+
+    await upsertCodexAppHistoryEntry({
+      codexHome,
+      threadId: 'thread-upsert-1',
+      title: 'Untitled conversation',
+      updatedAt: '2026-03-29T03:00:00.000Z',
+    })
+    await upsertCodexAppHistoryEntry({
+      codexHome,
+      threadId: 'thread-upsert-1',
+      title: 'Resolved Title',
+      updatedAt: '2026-03-29T04:00:00.000Z',
+    })
+
+    const indexContent = await readFile(join(codexHome, 'session_index.jsonl'), 'utf8')
+    const lines = indexContent.trim().split('\n')
+    expect(lines).toHaveLength(2)
+    const parsedLines = lines.map((line) => JSON.parse(line) as Record<string, unknown>)
+    for (const line of parsedLines) {
+      expect(Object.keys(line).sort()).toEqual(['id', 'thread_name', 'updated_at'])
+    }
+
+    const result = await listCodexAppHistory({ codexHome })
+    expect(result.entries).toHaveLength(1)
+    expect(result.entries[0]).toMatchObject({
+      id: 'thread-upsert-1',
+      title: 'Resolved Title',
+      updatedAt: '2026-03-29T04:00:00.000Z',
+    })
+    expect(result.entries[0]?.cwd).toBeUndefined()
+  })
+
+  it('does not scope-match unresolved cwd before session file exists', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'codex-history-upsert-scope-no-cwd-'))
+    tempDirs.push(root)
+    const codexHome = join(root, '.codex')
+    await mkdir(codexHome, { recursive: true })
+
+    await upsertCodexAppHistoryEntry({
+      codexHome,
+      threadId: 'thread-upsert-scoped-cwd',
+      title: 'Scoped',
+      updatedAt: '2026-03-29T03:15:00.000Z',
+    })
+
+    const scopedResult = await listCodexAppHistory({
+      codexHome,
+      showAll: false,
+      cwd: '/workspace/untracked/project-z',
+    })
+    expect(scopedResult.entries).toHaveLength(0)
+  })
+
+  it('updates thread-workspace-root-hints when workspaceRootHint is provided', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'codex-history-upsert-hint-'))
+    tempDirs.push(root)
+    const codexHome = join(root, '.codex')
+    await mkdir(codexHome, { recursive: true })
+
+    await writeFile(
+      join(codexHome, '.codex-global-state.json'),
+      JSON.stringify({
+        'active-workspace-roots': ['/workspace/current'],
+      }),
+      'utf8',
+    )
+
+    await upsertCodexAppHistoryEntry({
+      codexHome,
+      threadId: 'THREAD-UPSERT-HINT-1',
+      title: 'Hinted',
+      updatedAt: '2026-03-29T03:30:00.000Z',
+      workspaceRootHint: '/workspace/current',
+    })
+
+    const globalState = JSON.parse(await readFile(join(codexHome, '.codex-global-state.json'), 'utf8')) as Record<string, unknown>
+    const hints = globalState['thread-workspace-root-hints'] as Record<string, unknown>
+    expect(hints).toMatchObject({
+      'thread-upsert-hint-1': '/workspace/current',
+    })
+    expect(globalState['active-workspace-roots']).toEqual(['/workspace/current'])
+    expect(Object.keys(globalState).sort()).toEqual(['active-workspace-roots', 'thread-workspace-root-hints'])
+  })
+
+  it('upserts session index without creating global state when workspaceRootHint is omitted', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'codex-history-upsert-no-global-'))
+    tempDirs.push(root)
+    const codexHome = join(root, '.codex')
+    await mkdir(codexHome, { recursive: true })
+
+    await upsertCodexAppHistoryEntry({
+      codexHome,
+      threadId: 'thread-upsert-no-global',
+      title: 'No global state',
+      updatedAt: '2026-03-29T05:00:00.000Z',
+    })
+
+    await expect(readFile(join(codexHome, '.codex-global-state.json'), 'utf8')).rejects.toMatchObject({
+      code: 'ENOENT',
+    })
+    const result = await listCodexAppHistory({ codexHome })
+    expect(result.entries.map((entry) => entry.id)).toEqual(['thread-upsert-no-global'])
   })
 })

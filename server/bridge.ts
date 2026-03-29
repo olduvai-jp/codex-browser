@@ -1,4 +1,4 @@
-import { createServer } from 'node:http'
+import { createServer, type IncomingMessage } from 'node:http'
 import { spawn, type ChildProcessWithoutNullStreams } from 'node:child_process'
 import { createInterface } from 'node:readline'
 
@@ -21,7 +21,7 @@ import {
   type InitializeClientResponse,
 } from './initialize-request-cache'
 import { listDirectoryChildren } from './directory-listing'
-import { listCodexAppHistory } from './codex-app-history'
+import { listCodexAppHistory, upsertCodexAppHistoryEntry } from './codex-app-history'
 
 const BRIDGE_HOST = process.env.BRIDGE_HOST ?? '127.0.0.1'
 const BRIDGE_PORT = Number.parseInt(process.env.BRIDGE_PORT ?? '8787', 10)
@@ -30,6 +30,67 @@ const BRIDGE_CWD = process.cwd()
 
 if (!Number.isFinite(BRIDGE_PORT) || BRIDGE_PORT <= 0) {
   throw new Error(`Invalid BRIDGE_PORT: ${process.env.BRIDGE_PORT ?? '(unset)'}`)
+}
+
+type CodexAppHistoryUpsertBody = {
+  threadId: string
+  title: string
+  updatedAt: string
+  workspaceRootHint?: string
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null
+}
+
+function parseOptionalTrimmedString(value: unknown): string | undefined {
+  if (typeof value !== 'string') {
+    return undefined
+  }
+  const trimmed = value.trim()
+  return trimmed.length > 0 ? trimmed : undefined
+}
+
+function parseCodexAppHistoryUpsertBody(payload: unknown): CodexAppHistoryUpsertBody | null {
+  if (!isRecord(payload)) {
+    return null
+  }
+
+  const threadId = parseOptionalTrimmedString(payload.threadId)
+  const title = parseOptionalTrimmedString(payload.title)
+  const updatedAt = parseOptionalTrimmedString(payload.updatedAt)
+  if (!threadId || !title || !updatedAt) {
+    return null
+  }
+
+  return {
+    threadId,
+    title,
+    updatedAt,
+    workspaceRootHint: parseOptionalTrimmedString(payload.workspaceRootHint),
+  }
+}
+
+async function readJsonRequestBody(req: IncomingMessage): Promise<unknown> {
+  const chunks: Buffer[] = []
+  await new Promise<void>((resolve, reject) => {
+    req.on('data', (chunk) => {
+      if (typeof chunk === 'string') {
+        chunks.push(Buffer.from(chunk, 'utf8'))
+        return
+      }
+      chunks.push(Buffer.from(chunk))
+    })
+    req.on('end', () => resolve())
+    req.on('error', (error) => reject(error))
+  })
+
+  const rawBody = Buffer.concat(chunks).toString('utf8').trim()
+  if (rawBody.length === 0) {
+    return null
+  }
+
+  return JSON.parse(rawBody) as unknown
 }
 
 const httpServer = createServer((req, res) => {
@@ -72,6 +133,35 @@ const httpServer = createServer((req, res) => {
       .catch((error) => {
         const message = error instanceof Error ? error.message : String(error)
         res.writeHead(500, { 'content-type': 'application/json' })
+        res.end(JSON.stringify({ error: message }))
+      })
+    return
+  }
+
+  if (req.method === 'POST' && req.url?.startsWith('/api/codex-app/history/upsert')) {
+    readJsonRequestBody(req)
+      .then((payload) => {
+        const body = parseCodexAppHistoryUpsertBody(payload)
+        if (!body) {
+          res.writeHead(400, { 'content-type': 'application/json' })
+          res.end(JSON.stringify({ error: 'Invalid request body' }))
+          return
+        }
+
+        upsertCodexAppHistoryEntry(body)
+          .then(() => {
+            res.writeHead(200, { 'content-type': 'application/json' })
+            res.end(JSON.stringify({ ok: true }))
+          })
+          .catch((error) => {
+            const message = error instanceof Error ? error.message : String(error)
+            res.writeHead(500, { 'content-type': 'application/json' })
+            res.end(JSON.stringify({ error: message }))
+          })
+      })
+      .catch((error) => {
+        const message = error instanceof Error ? error.message : String(error)
+        res.writeHead(400, { 'content-type': 'application/json' })
         res.end(JSON.stringify({ error: message }))
       })
     return

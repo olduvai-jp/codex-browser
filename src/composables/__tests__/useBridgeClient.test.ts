@@ -693,6 +693,315 @@ describe('useBridgeClient sendTurn', () => {
     vi.unstubAllGlobals()
     wrapper.unmount()
   })
+
+  it('keeps scoped codex-app history visible after upsert when cwd does not match known roots', async () => {
+    bridgeMock.setRequestHandler(async (method) => {
+      if (method === 'initialize') {
+        return { userAgent: 'mock-codex-agent' }
+      }
+      if (method === 'model/list') {
+        return { models: [] }
+      }
+      if (method === 'thread/start') {
+        return {
+          thread: {
+            id: 'codex-upsert-thread-1',
+          },
+        }
+      }
+      if (method === 'turn/start') {
+        return {
+          turn: {
+            id: 'turn-codex-upsert-1',
+          },
+        }
+      }
+      throw new Error(`Unexpected method: ${method}`)
+    })
+
+    const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = new URL(String(input), 'http://localhost')
+      const method = String(init?.method ?? 'GET').toUpperCase()
+
+      if (url.pathname === '/api/codex-app/history/upsert' && method === 'POST') {
+        return {
+          ok: true,
+          json: async () => ({ ok: true }),
+        } as Response
+      }
+
+      if (url.pathname === '/api/codex-app/history' && method === 'GET') {
+        return {
+          ok: true,
+          json: async () => ({
+            entries: [],
+            roots: {
+              activeRoots: [],
+              savedRoots: [],
+              labels: {},
+            },
+            generatedAt: '2026-03-29T10:00:00.000Z',
+          }),
+        } as Response
+      }
+
+      throw new Error(`Unexpected fetch request: ${method} ${url.pathname}`)
+    })
+    vi.stubGlobal('fetch', fetchMock)
+
+    const wrapper = mount(HostComponent)
+    const vm = wrapper.vm as unknown as {
+      connect: () => Promise<void>
+      setHistoryDisplayMode: (value: string) => Promise<void>
+      startThread: (cwd?: string) => Promise<void>
+      sendTurn: () => Promise<void>
+      messageInput: string
+      activeThreadId: string
+      currentTurnId: string
+      codexAppHistoryEntries: Array<{ id: string; title: string }>
+    }
+
+    await vm.connect()
+    await flushPromises()
+
+    getClientInstance().emitMessage({
+      type: 'bridge/status',
+      payload: {
+        event: 'bridge-started',
+        details: {
+          cwd: '/workspace/current/project',
+        },
+      },
+    })
+    await flushPromises()
+
+    await vm.setHistoryDisplayMode('codex-app')
+    await flushPromises()
+
+    await vm.startThread('/workspace/new-space/project-z')
+    await flushPromises()
+    expect(vm.activeThreadId).toBe('codex-upsert-thread-1')
+    expect(vm.codexAppHistoryEntries[0]).toMatchObject({
+      id: 'codex-upsert-thread-1',
+      title: 'Untitled conversation',
+      cwd: '/workspace/new-space/project-z',
+    })
+
+    vm.messageInput = 'Codex history title'
+    await vm.sendTurn()
+    await flushPromises()
+    expect(vm.currentTurnId).toBe('turn-codex-upsert-1')
+
+    const upsertCalls = fetchMock.mock.calls.filter(([, requestInit]) => {
+      return String((requestInit as RequestInit | undefined)?.method ?? 'GET').toUpperCase() === 'POST'
+    })
+    expect(upsertCalls).toHaveLength(2)
+    const firstPayload = JSON.parse(String((upsertCalls[0]?.[1] as RequestInit | undefined)?.body ?? '{}')) as Record<string, unknown>
+    const secondPayload = JSON.parse(String((upsertCalls[1]?.[1] as RequestInit | undefined)?.body ?? '{}')) as Record<string, unknown>
+    expect(firstPayload).toMatchObject({
+      threadId: 'codex-upsert-thread-1',
+      title: 'Untitled conversation',
+    })
+    expect(firstPayload.cwd).toBeUndefined()
+    expect(secondPayload).toMatchObject({
+      threadId: 'codex-upsert-thread-1',
+      title: 'Codex history title',
+    })
+    expect(secondPayload.cwd).toBeUndefined()
+    expect(vm.codexAppHistoryEntries[0]).toMatchObject({
+      id: 'codex-upsert-thread-1',
+      title: 'Codex history title',
+      cwd: '/workspace/new-space/project-z',
+    })
+
+    vi.unstubAllGlobals()
+    wrapper.unmount()
+  })
+
+  it('does not call codex-app history upsert in native mode', async () => {
+    bridgeMock.setRequestHandler(async (method) => {
+      if (method === 'initialize') {
+        return { userAgent: 'mock-codex-agent' }
+      }
+      if (method === 'model/list') {
+        return { models: [] }
+      }
+      if (method === 'thread/start') {
+        return {
+          thread: {
+            id: 'native-upsert-guard-thread-1',
+          },
+        }
+      }
+      if (method === 'turn/start') {
+        return {
+          turn: {
+            id: 'turn-native-upsert-guard-1',
+          },
+        }
+      }
+      throw new Error(`Unexpected method: ${method}`)
+    })
+
+    const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = new URL(String(input), 'http://localhost')
+      const method = String(init?.method ?? 'GET').toUpperCase()
+      if (url.pathname === '/api/codex-app/history/upsert' && method === 'POST') {
+        return {
+          ok: true,
+          json: async () => ({ ok: true }),
+        } as Response
+      }
+      throw new Error(`Unexpected fetch request: ${method} ${url.pathname}`)
+    })
+    vi.stubGlobal('fetch', fetchMock)
+
+    const wrapper = mount(HostComponent)
+    const vm = wrapper.vm as unknown as {
+      connect: () => Promise<void>
+      startThread: (cwd?: string) => Promise<void>
+      sendTurn: () => Promise<void>
+      messageInput: string
+      activeThreadId: string
+      currentTurnId: string
+    }
+
+    await vm.connect()
+    await flushPromises()
+
+    getClientInstance().emitMessage({
+      type: 'bridge/status',
+      payload: {
+        event: 'bridge-started',
+        details: {
+          cwd: '/workspace/native/project',
+        },
+      },
+    })
+    await flushPromises()
+
+    await vm.startThread('/workspace/native/project')
+    await flushPromises()
+    expect(vm.activeThreadId).toBe('native-upsert-guard-thread-1')
+
+    vm.messageInput = 'native mode should skip codex history upsert'
+    await vm.sendTurn()
+    await flushPromises()
+    expect(vm.currentTurnId).toBe('turn-native-upsert-guard-1')
+
+    const upsertCalls = fetchMock.mock.calls.filter(([requestInput, requestInit]) => {
+      const url = new URL(String(requestInput), 'http://localhost')
+      const method = String((requestInit as RequestInit | undefined)?.method ?? 'GET').toUpperCase()
+      return url.pathname === '/api/codex-app/history/upsert' && method === 'POST'
+    })
+    expect(upsertCalls).toHaveLength(0)
+
+    vi.unstubAllGlobals()
+    wrapper.unmount()
+  })
+
+  it('does not block thread/start or turn/start when codex-app history upsert fails', async () => {
+    bridgeMock.setRequestHandler(async (method) => {
+      if (method === 'initialize') {
+        return { userAgent: 'mock-codex-agent' }
+      }
+      if (method === 'model/list') {
+        return { models: [] }
+      }
+      if (method === 'thread/start') {
+        return {
+          thread: {
+            id: 'codex-upsert-fail-thread-1',
+          },
+        }
+      }
+      if (method === 'turn/start') {
+        return {
+          turn: {
+            id: 'turn-codex-upsert-fail-1',
+          },
+        }
+      }
+      throw new Error(`Unexpected method: ${method}`)
+    })
+
+    const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = new URL(String(input), 'http://localhost')
+      const method = String(init?.method ?? 'GET').toUpperCase()
+
+      if (url.pathname === '/api/codex-app/history' && method === 'GET') {
+        return {
+          ok: true,
+          json: async () => ({
+            entries: [],
+            roots: {
+              activeRoots: ['/workspace/current'],
+              savedRoots: [],
+              labels: {
+                '/workspace/current': 'Current',
+              },
+            },
+            generatedAt: '2026-03-29T10:00:00.000Z',
+          }),
+        } as Response
+      }
+
+      if (url.pathname === '/api/codex-app/history/upsert' && method === 'POST') {
+        return {
+          ok: false,
+          statusText: 'Internal Server Error',
+          json: async () => ({ error: 'upsert failed' }),
+        } as Response
+      }
+
+      throw new Error(`Unexpected fetch request: ${method} ${url.pathname}`)
+    })
+    vi.stubGlobal('fetch', fetchMock)
+
+    const wrapper = mount(HostComponent)
+    const vm = wrapper.vm as unknown as {
+      connect: () => Promise<void>
+      setHistoryDisplayMode: (value: string) => Promise<void>
+      startThread: () => Promise<void>
+      sendTurn: () => Promise<void>
+      messageInput: string
+      activeThreadId: string
+      currentTurnId: string
+    }
+
+    await vm.connect()
+    await flushPromises()
+
+    getClientInstance().emitMessage({
+      type: 'bridge/status',
+      payload: {
+        event: 'bridge-started',
+        details: {
+          cwd: '/workspace/current/project',
+        },
+      },
+    })
+    await flushPromises()
+
+    await vm.setHistoryDisplayMode('codex-app')
+    await flushPromises()
+
+    await vm.startThread()
+    await flushPromises()
+    expect(vm.activeThreadId).toBe('codex-upsert-fail-thread-1')
+
+    vm.messageInput = 'upsert failure should not block turn/start'
+    await vm.sendTurn()
+    await flushPromises()
+    expect(vm.currentTurnId).toBe('turn-codex-upsert-fail-1')
+
+    const methods = bridgeMock.getRequestCalls().map((call) => call.method)
+    expect(methods).toContain('thread/start')
+    expect(methods).toContain('turn/start')
+
+    vi.unstubAllGlobals()
+    wrapper.unmount()
+  })
 })
 
 describe('useBridgeClient quickStartConversation', () => {

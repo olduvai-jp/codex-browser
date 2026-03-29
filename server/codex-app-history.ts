@@ -1,5 +1,5 @@
 import { createReadStream } from 'node:fs'
-import { readFile, readdir } from 'node:fs/promises'
+import { appendFile, mkdir, readFile, readdir, writeFile } from 'node:fs/promises'
 import { homedir } from 'node:os'
 import { basename, join, resolve, sep } from 'node:path'
 import { createInterface } from 'node:readline'
@@ -46,6 +46,14 @@ export type CodexAppHistoryOptions = {
   now?: () => Date
   showAll?: boolean
   cwd?: string
+}
+
+export type CodexAppHistoryUpsertOptions = {
+  codexHome?: string
+  threadId: string
+  title: string
+  updatedAt: string
+  workspaceRootHint?: string
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -165,6 +173,48 @@ async function readGlobalState(codexHome: string): Promise<GlobalStateSnapshot> 
     }
     throw error
   }
+}
+
+async function readMutableGlobalStateObject(codexHome: string): Promise<Record<string, unknown>> {
+  const globalStatePath = join(codexHome, '.codex-global-state.json')
+  try {
+    const content = await readFile(globalStatePath, 'utf8')
+    const parsed = JSON.parse(content) as unknown
+    return isRecord(parsed) ? { ...parsed } : {}
+  } catch (error) {
+    const nodeError = error as NodeJS.ErrnoException
+    if (nodeError.code === 'ENOENT') {
+      return {}
+    }
+    throw error
+  }
+}
+
+async function upsertThreadWorkspaceRootHint(
+  codexHome: string,
+  threadId: string,
+  workspaceRootHint: string,
+): Promise<void> {
+  const globalStatePath = join(codexHome, '.codex-global-state.json')
+  const nextState = await readMutableGlobalStateObject(codexHome)
+  const existingHintsRaw = nextState['thread-workspace-root-hints']
+  const nextHints: Record<string, string> = {}
+  if (isRecord(existingHintsRaw)) {
+    for (const [rawId, rawRoot] of Object.entries(existingHintsRaw)) {
+      if (typeof rawRoot !== 'string') {
+        continue
+      }
+      const normalizedId = rawId.trim().toLowerCase()
+      const normalizedRoot = rawRoot.trim()
+      if (normalizedId.length === 0 || normalizedRoot.length === 0) {
+        continue
+      }
+      nextHints[normalizedId] = normalizePath(normalizedRoot)
+    }
+  }
+  nextHints[threadId.toLowerCase()] = normalizePath(workspaceRootHint)
+  nextState['thread-workspace-root-hints'] = nextHints
+  await writeFile(globalStatePath, JSON.stringify(nextState), 'utf8')
 }
 
 function parseDateMs(value?: string): number | null {
@@ -517,5 +567,38 @@ export async function listCodexAppHistory(
       labels: globalState.labels,
     },
     generatedAt: now().toISOString(),
+  }
+}
+
+export async function upsertCodexAppHistoryEntry(
+  options: CodexAppHistoryUpsertOptions,
+): Promise<void> {
+  const codexHome = options.codexHome ?? join(homedir(), '.codex')
+  const threadId = options.threadId.trim()
+  const title = options.title.trim()
+  const updatedAt = options.updatedAt.trim()
+
+  if (threadId.length === 0) {
+    throw new Error('threadId is required')
+  }
+  if (title.length === 0) {
+    throw new Error('title is required')
+  }
+  if (updatedAt.length === 0) {
+    throw new Error('updatedAt is required')
+  }
+
+  await mkdir(codexHome, { recursive: true })
+  const sessionIndexPath = join(codexHome, 'session_index.jsonl')
+  const line = JSON.stringify({
+    id: threadId,
+    thread_name: title,
+    updated_at: updatedAt,
+  })
+  await appendFile(sessionIndexPath, `${line}\n`, 'utf8')
+
+  const workspaceRootHint = options.workspaceRootHint?.trim()
+  if (workspaceRootHint && workspaceRootHint.length > 0) {
+    await upsertThreadWorkspaceRootHint(codexHome, threadId, workspaceRootHint)
   }
 }

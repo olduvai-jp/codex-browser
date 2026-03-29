@@ -368,9 +368,7 @@ function filterCodexAppOverlayEntriesByScope(
   }
 
   const resolvedBridgeCwd = normalizePath(normalizedBridgeCwd)
-  const workspaceRoot =
-    findBestMatchingRoot(resolvedBridgeCwd, roots.activeRoots) ??
-    findBestMatchingRoot(resolvedBridgeCwd, roots.savedRoots)
+  const workspaceRoot = findBestMatchingRoot(resolvedBridgeCwd, roots.savedRoots)
   if (workspaceRoot) {
     return entries.filter((entry) => {
       const overlayWorkspaceRoot = entry.workspaceRoot?.trim()
@@ -688,12 +686,12 @@ function extractThreadHistoryNextCursor(payload: unknown): string | null {
 function resolveWorkspaceKeyForThread(entry: ThreadHistoryEntry): string {
   const normalizedWorkspaceRoot = entry.workspaceRoot?.trim() ?? ''
   if (normalizedWorkspaceRoot.length > 0) {
-    return normalizedWorkspaceRoot
+    return normalizePath(normalizedWorkspaceRoot)
   }
 
   const normalizedCwd = entry.cwd?.trim() ?? ''
   if (normalizedCwd.length > 0) {
-    return normalizedCwd
+    return normalizePath(normalizedCwd)
   }
 
   return UNKNOWN_WORKSPACE_LABEL
@@ -701,10 +699,9 @@ function resolveWorkspaceKeyForThread(entry: ThreadHistoryEntry): string {
 
 function groupThreadHistoryByWorkspace(
   entries: ThreadHistoryEntry[],
-  bridgeCwd: string,
-  usePrefixForCurrentWorkspace: boolean,
+  currentWorkspaceKey: string,
 ): WorkspaceHistoryGroup[] {
-  const normalizedBridgeCwd = bridgeCwd.trim()
+  const normalizedCurrentWorkspaceKey = normalizePath(currentWorkspaceKey.trim())
   const grouped = new Map<
     string,
     {
@@ -751,17 +748,17 @@ function groupThreadHistoryByWorkspace(
       latestUpdatedAt: entry.updatedAt,
       latestUpdatedAtMs: updatedAtMs,
       isCurrentWorkspace:
-        normalizedBridgeCwd.length > 0 &&
-        (workspaceKey === normalizedBridgeCwd ||
-          (usePrefixForCurrentWorkspace && isPathBoundaryPrefix(workspaceKey, normalizedBridgeCwd))),
+        normalizedCurrentWorkspaceKey.length > 0 &&
+        workspaceKey === normalizedCurrentWorkspaceKey,
     })
   }
 
   const hasCurrentWorkspace = [...grouped.values()].some((group) => group.isCurrentWorkspace)
-  if (normalizedBridgeCwd.length > 0 && !hasCurrentWorkspace) {
-    grouped.set(normalizedBridgeCwd, {
-      workspaceKey: normalizedBridgeCwd,
-      workspaceLabel: normalizedBridgeCwd.split('/').filter(Boolean).pop() || normalizedBridgeCwd,
+  if (normalizedCurrentWorkspaceKey.length > 0 && !hasCurrentWorkspace) {
+    grouped.set(normalizedCurrentWorkspaceKey, {
+      workspaceKey: normalizedCurrentWorkspaceKey,
+      workspaceLabel:
+        normalizedCurrentWorkspaceKey.split('/').filter(Boolean).pop() || normalizedCurrentWorkspaceKey,
       threads: [],
       threadCount: 0,
       latestUpdatedAt: undefined,
@@ -990,8 +987,19 @@ export function useBridgeClient() {
       !historyLoading.value &&
       historyNextCursor.value.trim().length > 0,
   )
+  const currentWorkspaceGroupKey = computed(() => {
+    const normalizedBridgeCwd = normalizePath(bridgeCwd.value.trim())
+    if (normalizedBridgeCwd.length === 0) {
+      return ''
+    }
+    if (!isCodexAppHistoryMode.value) {
+      return normalizedBridgeCwd
+    }
+
+    return findBestMatchingRoot(normalizedBridgeCwd, codexAppRoots.value.savedRoots) ?? normalizedBridgeCwd
+  })
   const workspaceHistoryGroups = computed<WorkspaceHistoryGroup[]>(() =>
-    groupThreadHistoryByWorkspace(visibleHistoryEntries.value, bridgeCwd.value, isCodexAppHistoryMode.value),
+    groupThreadHistoryByWorkspace(visibleHistoryEntries.value, currentWorkspaceGroupKey.value),
   )
   const timelineItems = computed<TimelineItem[]>(() => {
     const items: TimelineItem[] = []
@@ -1255,10 +1263,6 @@ export function useBridgeClient() {
       return undefined
     }
 
-    const activeMatch = findBestMatchingRoot(normalizedCwd, codexAppRoots.value.activeRoots)
-    if (activeMatch) {
-      return activeMatch
-    }
     const savedMatch = findBestMatchingRoot(normalizedCwd, codexAppRoots.value.savedRoots)
     if (savedMatch) {
       return savedMatch

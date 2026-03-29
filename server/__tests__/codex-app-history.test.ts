@@ -41,7 +41,7 @@ describe('listCodexAppHistory', () => {
     tempDirs.length = 0
   })
 
-  it('resolves workspace root precedence and includes roots snapshot', async () => {
+  it('resolves workspace root precedence from hints then saved roots and includes roots snapshot', async () => {
     const root = await mkdtemp(join(tmpdir(), 'codex-history-'))
     tempDirs.push(root)
     const codexHome = join(root, '.codex')
@@ -109,8 +109,8 @@ describe('listCodexAppHistory', () => {
       workspaceLabel: 'Hint Root',
     })
     expect(result.entries.find((entry) => entry.id === SESSION_IDS.active)).toMatchObject({
-      workspaceRoot: '/workspace/team-a',
-      workspaceLabel: 'Team A',
+      workspaceRoot: '/workspace/team-a/project-1',
+      workspaceLabel: 'project-1',
     })
     expect(result.entries.find((entry) => entry.id === SESSION_IDS.saved)).toMatchObject({
       workspaceRoot: '/saved-root',
@@ -163,7 +163,7 @@ describe('listCodexAppHistory', () => {
     expect(typeof result.generatedAt).toBe('string')
   })
 
-  it('applies cwd scope on the server when showAll is disabled', async () => {
+  it('applies saved-root scope on the server when showAll is disabled', async () => {
     const root = await mkdtemp(join(tmpdir(), 'codex-history-scope-'))
     tempDirs.push(root)
     const codexHome = join(root, '.codex')
@@ -191,14 +191,21 @@ describe('listCodexAppHistory', () => {
     const scopedResult = await listCodexAppHistory({
       codexHome,
       showAll: false,
+      cwd: '/workspace/other/subdir',
+    })
+    expect(scopedResult.entries.map((entry) => entry.id)).toEqual([SESSION_IDS.saved])
+
+    const activeOnlyScopedResult = await listCodexAppHistory({
+      codexHome,
+      showAll: false,
       cwd: '/workspace/current/subdir',
     })
-    expect(scopedResult.entries.map((entry) => entry.id)).toEqual([SESSION_IDS.active])
+    expect(activeOnlyScopedResult.entries).toHaveLength(0)
 
     const showAllResult = await listCodexAppHistory({
       codexHome,
       showAll: true,
-      cwd: '/workspace/current/subdir',
+      cwd: '/workspace/other/subdir',
     })
     expect(showAllResult.entries.map((entry) => entry.id)).toEqual([
       SESSION_IDS.saved,

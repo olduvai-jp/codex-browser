@@ -398,11 +398,6 @@ function resolveWorkspaceRoot(
   }
 
   const normalizedCwd = normalizePath(cwd)
-  const activeRoot = findBestMatchingRoot(normalizedCwd, globalState.activeRoots)
-  if (activeRoot) {
-    return activeRoot
-  }
-
   const savedRoot = findBestMatchingRoot(normalizedCwd, globalState.savedRoots)
   if (savedRoot) {
     return savedRoot
@@ -472,9 +467,7 @@ function filterCodexAppHistoryEntriesByScope(
   }
 
   const resolvedCwd = normalizePath(normalizedCwd)
-  const workspaceRoot =
-    findBestMatchingRoot(resolvedCwd, globalState.activeRoots) ??
-    findBestMatchingRoot(resolvedCwd, globalState.savedRoots)
+  const workspaceRoot = findBestMatchingRoot(resolvedCwd, globalState.savedRoots)
   if (workspaceRoot) {
     return entries.filter((entry) => entry.workspaceRoot === workspaceRoot)
   }

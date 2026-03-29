@@ -606,7 +606,7 @@ describe('useBridgeClient sendTurn', () => {
     wrapper.unmount()
   })
 
-  it('keeps native current workspace strict while codex-app mode allows root-prefix matching', async () => {
+  it('keeps native current workspace strict and ignores activeRoots for codex-app current workspace grouping', async () => {
     bridgeMock.setRequestHandler(async (method, params) => {
       if (method === 'initialize') {
         return { userAgent: 'mock-codex-agent' }
@@ -688,6 +688,8 @@ describe('useBridgeClient sendTurn', () => {
     await vm.setHistoryDisplayMode('codex-app')
     await flushPromises()
     expect(vm.workspaceHistoryGroups.find((group) => group.workspaceKey === '/workspace/current')?.isCurrentWorkspace)
+      .toBe(false)
+    expect(vm.workspaceHistoryGroups.find((group) => group.workspaceKey === '/workspace/current/project')?.isCurrentWorkspace)
       .toBe(true)
 
     vi.unstubAllGlobals()

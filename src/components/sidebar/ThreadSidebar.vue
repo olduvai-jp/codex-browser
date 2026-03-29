@@ -36,8 +36,21 @@ const emit = defineEmits<{
   disconnect: []
 }>()
 
-const viewMode = ref<'flat' | 'grouped'>('flat')
+const nativeViewMode = ref<'flat' | 'grouped'>('flat')
+const codexAppViewMode = ref<'flat' | 'grouped'>('flat')
 const isCodexAppMode = computed(() => props.historyDisplayMode === 'codex-app')
+const currentViewMode = computed<'flat' | 'grouped'>(() =>
+  isCodexAppMode.value ? codexAppViewMode.value : nativeViewMode.value,
+)
+
+function setCurrentViewMode(mode: 'flat' | 'grouped'): void {
+  if (isCodexAppMode.value) {
+    codexAppViewMode.value = mode
+    return
+  }
+
+  nativeViewMode.value = mode
+}
 
 type FlatThread = ThreadHistoryEntry & { workspaceLabel: string }
 
@@ -202,20 +215,20 @@ watch(
         {{ props.historyShowAll ? 'このWSのみ' : 'すべて表示' }}
       </button>
       <button
-        v-if="!isCodexAppMode"
         type="button"
         class="rounded-md px-2 py-1 text-[11px] font-medium transition-colors"
-        :class="viewMode === 'flat' ? 'bg-sidebar-hover text-text-primary' : 'text-text-muted hover:text-text-secondary'"
-        @click="viewMode = 'flat'"
+        data-testid="history-view-flat-button"
+        :class="currentViewMode === 'flat' ? 'bg-sidebar-hover text-text-primary' : 'text-text-muted hover:text-text-secondary'"
+        @click="setCurrentViewMode('flat')"
       >
         新しい順
       </button>
       <button
-        v-if="!isCodexAppMode"
         type="button"
         class="rounded-md px-2 py-1 text-[11px] font-medium transition-colors"
-        :class="viewMode === 'grouped' ? 'bg-sidebar-hover text-text-primary' : 'text-text-muted hover:text-text-secondary'"
-        @click="viewMode = 'grouped'"
+        data-testid="history-view-grouped-button"
+        :class="currentViewMode === 'grouped' ? 'bg-sidebar-hover text-text-primary' : 'text-text-muted hover:text-text-secondary'"
+        @click="setCurrentViewMode('grouped')"
       >
         WS別
       </button>
@@ -231,7 +244,7 @@ watch(
       </p>
 
       <!-- Flat view -->
-      <template v-if="isCodexAppMode || viewMode === 'flat'">
+      <template v-if="currentViewMode === 'flat'">
         <ThreadHistoryItem
           v-for="entry in flatThreads"
           :key="entry.id"

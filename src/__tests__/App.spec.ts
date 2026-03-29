@@ -1764,7 +1764,16 @@ describe('App.vue ui phase-1 flows', () => {
 
     expect(getVisibleHistoryThreadLabels(wrapper)[0]).toBe('Other newest')
 
-    const otherThreadItem = wrapper.find('[data-testid="history-thread-item"][data-thread-id="other-newest"]')
+    await getByTestId(wrapper, 'history-view-grouped-button').trigger('click')
+    await flushPromises()
+    expect(wrapper.findAll('[data-testid="workspace-group"]')).toHaveLength(2)
+
+    await getWorkspaceGroupToggle(wrapper, '/workspace/other').trigger('click')
+    await flushPromises()
+
+    const otherThreadItem = wrapper.find(
+      '[data-testid="workspace-group-threads"][data-workspace-key="/workspace/other"] [data-testid="history-thread-item"][data-thread-id="other-newest"]',
+    )
     expect(otherThreadItem.exists()).toBe(true)
     await otherThreadItem.trigger('click')
     await flushPromises()
@@ -1778,6 +1787,7 @@ describe('App.vue ui phase-1 flows', () => {
     await flushPromises()
 
     expect(getByTestId(wrapper, 'history-scope-toggle-button').text()).toContain('すべて表示')
+    expect(wrapper.find('[data-testid="workspace-group"]').exists()).toBe(false)
     const nativeThreadListCalls = bridgeMock
       .getRequestCalls()
       .filter((call) => call.method === 'thread/list')
@@ -1791,10 +1801,15 @@ describe('App.vue ui phase-1 flows', () => {
     })
     expect(getVisibleHistoryThreadLabels(wrapper)).toEqual(['Native current'])
 
+    await getByTestId(wrapper, 'history-view-grouped-button').trigger('click')
+    await flushPromises()
+    expect(wrapper.find('[data-testid="workspace-group"]').exists()).toBe(true)
+
     await getByTestId(wrapper, 'history-display-codex-button').trigger('click')
     await flushPromises()
     const lastFetchUrl = String(fetchMock.mock.calls[fetchMock.mock.calls.length - 1]?.[0])
     expect(lastFetchUrl).toContain('showAll=1')
+    expect(wrapper.findAll('[data-testid="workspace-group"]')).toHaveLength(2)
 
     vi.unstubAllGlobals()
     wrapper.unmount()
@@ -3794,6 +3809,83 @@ describe('ThreadSidebar workspace expansion sync', () => {
     expect(
       wrapper.find('[data-testid="workspace-group-threads"][data-workspace-key="/workspace-b"]').exists(),
     ).toBe(true)
+
+    wrapper.unmount()
+  })
+
+  it('keeps view mode state independent between native and codex-app', async () => {
+    const workspaceGroups: WorkspaceHistoryGroup[] = [
+      {
+        workspaceKey: '/workspace-a',
+        workspaceLabel: '/workspace-a',
+        threadCount: 1,
+        latestUpdatedAt: '2026-02-28T12:00:00.000Z',
+        isCurrentWorkspace: false,
+        threads: [
+          {
+            id: 'thread-a',
+            title: 'Thread A',
+            cwd: '/workspace-a',
+            updatedAt: '2026-02-28T12:00:00.000Z',
+          },
+        ],
+      },
+      {
+        workspaceKey: '/workspace-b',
+        workspaceLabel: '/workspace-b',
+        threadCount: 1,
+        latestUpdatedAt: '2026-02-28T11:00:00.000Z',
+        isCurrentWorkspace: false,
+        threads: [
+          {
+            id: 'thread-b',
+            title: 'Thread B',
+            cwd: '/workspace-b',
+            updatedAt: '2026-02-28T11:00:00.000Z',
+          },
+        ],
+      },
+    ]
+
+    const wrapper = mount(ThreadSidebar, {
+      props: {
+        workspaceGroups,
+        selectedThreadId: 'thread-a',
+        activeThreadId: '',
+        historyDisplayMode: 'codex-app',
+        canRefresh: true,
+        historyShowAll: true,
+        historyLoading: false,
+        canLoadMoreHistory: false,
+        isTurnActive: false,
+        advancedPanelOpen: false,
+        isConnected: true,
+        connectionState: 'connected' as const,
+      },
+    })
+    await flushPromises()
+
+    expect(wrapper.find('[data-testid="workspace-group"]').exists()).toBe(false)
+
+    await getByTestId(wrapper, 'history-view-grouped-button').trigger('click')
+    await flushPromises()
+    expect(wrapper.findAll('[data-testid="workspace-group"]')).toHaveLength(2)
+
+    await wrapper.setProps({ historyDisplayMode: 'native' })
+    await flushPromises()
+    expect(wrapper.find('[data-testid="workspace-group"]').exists()).toBe(false)
+
+    await getByTestId(wrapper, 'history-view-grouped-button').trigger('click')
+    await flushPromises()
+    expect(wrapper.findAll('[data-testid="workspace-group"]')).toHaveLength(2)
+
+    await getByTestId(wrapper, 'history-view-flat-button').trigger('click')
+    await flushPromises()
+    expect(wrapper.find('[data-testid="workspace-group"]').exists()).toBe(false)
+
+    await wrapper.setProps({ historyDisplayMode: 'codex-app' })
+    await flushPromises()
+    expect(wrapper.findAll('[data-testid="workspace-group"]')).toHaveLength(2)
 
     wrapper.unmount()
   })

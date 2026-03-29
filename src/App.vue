@@ -28,7 +28,6 @@ const {
   configSnapshot,
   userGuidance,
   historyDisplayMode,
-  historyShowAll,
   historyLoading,
   logs,
   toolCalls,
@@ -75,7 +74,6 @@ const {
   setSelectedThinkingEffort,
   setSelectedExecutionModePreset,
   saveExecutionModeConfig,
-  toggleHistoryScope,
   loadConfig,
   respondToToolUserInput,
   cancelToolUserInputRequest,
@@ -118,7 +116,6 @@ onMounted(() => {
           :active-thread-id="activeThreadId"
           :history-display-mode="historyDisplayMode"
           :can-refresh="isConnected && initialized"
-          :history-show-all="historyShowAll"
           :history-loading="historyLoading"
           :can-load-more-history="historyCanLoadMore"
           :is-turn-active="isTurnActive"
@@ -127,7 +124,6 @@ onMounted(() => {
           :connection-state="connectionState"
           @refresh="loadThreadHistory"
           @set-history-display-mode="setHistoryDisplayMode"
-          @toggle-history-scope="toggleHistoryScope"
           @load-more-history="loadMoreThreadHistory"
           @open-thread="resumeThread($event)"
           @new-thread="startThread()"

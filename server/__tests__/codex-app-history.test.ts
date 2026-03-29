@@ -163,7 +163,7 @@ describe('listCodexAppHistory', () => {
     expect(typeof result.generatedAt).toBe('string')
   })
 
-  it('applies saved-root scope on the server when showAll is disabled', async () => {
+  it('ignores legacy scope options and always returns full history', async () => {
     const root = await mkdtemp(join(tmpdir(), 'codex-history-scope-'))
     tempDirs.push(root)
     const codexHome = join(root, '.codex')
@@ -188,54 +188,15 @@ describe('listCodexAppHistory', () => {
     await writeSessionFile(codexHome, SESSION_IDS.active, '/workspace/current/project-a')
     await writeSessionFile(codexHome, SESSION_IDS.saved, '/workspace/other/project-b')
 
-    const scopedResult = await listCodexAppHistory({
-      codexHome,
-      showAll: false,
-      cwd: '/workspace/other/subdir',
-    })
-    expect(scopedResult.entries.map((entry) => entry.id)).toEqual([SESSION_IDS.saved])
-
-    const activeOnlyScopedResult = await listCodexAppHistory({
-      codexHome,
-      showAll: false,
-      cwd: '/workspace/current/subdir',
-    })
-    expect(activeOnlyScopedResult.entries).toHaveLength(0)
-
-    const showAllResult = await listCodexAppHistory({
+    const result = await listCodexAppHistory({
       codexHome,
       showAll: true,
       cwd: '/workspace/other/subdir',
     })
-    expect(showAllResult.entries.map((entry) => entry.id)).toEqual([
+    expect(result.entries.map((entry) => entry.id)).toEqual([
       SESSION_IDS.saved,
       SESSION_IDS.active,
     ])
-  })
-
-  it('falls back to exact cwd filtering when no workspace root matches', async () => {
-    const root = await mkdtemp(join(tmpdir(), 'codex-history-scope-cwd-'))
-    tempDirs.push(root)
-    const codexHome = join(root, '.codex')
-    await mkdir(codexHome, { recursive: true })
-
-    await writeFile(
-      join(codexHome, 'session_index.jsonl'),
-      [
-        `{"id":"${SESSION_IDS.cwd}","thread_name":"Exact cwd","updated_at":"2026-03-28T08:00:00.000Z"}`,
-        `{"id":"${SESSION_IDS.unknown}","thread_name":"Different cwd","updated_at":"2026-03-28T09:00:00.000Z"}`,
-      ].join('\n'),
-      'utf8',
-    )
-    await writeSessionFile(codexHome, SESSION_IDS.cwd, '/plain/current')
-    await writeSessionFile(codexHome, SESSION_IDS.unknown, '/plain/other')
-
-    const result = await listCodexAppHistory({
-      codexHome,
-      showAll: false,
-      cwd: '/plain/current',
-    })
-    expect(result.entries.map((entry) => entry.id)).toEqual([SESSION_IDS.cwd])
   })
 
   it('upserts session index rows and latest updated_at wins in reader output', async () => {
@@ -275,7 +236,7 @@ describe('listCodexAppHistory', () => {
     expect(result.entries[0]?.cwd).toBeUndefined()
   })
 
-  it('does not scope-match unresolved cwd before session file exists', async () => {
+  it('keeps unresolved-cwd entries visible before session file exists', async () => {
     const root = await mkdtemp(join(tmpdir(), 'codex-history-upsert-scope-no-cwd-'))
     tempDirs.push(root)
     const codexHome = join(root, '.codex')
@@ -293,7 +254,7 @@ describe('listCodexAppHistory', () => {
       showAll: false,
       cwd: '/workspace/untracked/project-z',
     })
-    expect(scopedResult.entries).toHaveLength(0)
+    expect(scopedResult.entries.map((entry) => entry.id)).toEqual(['thread-upsert-scoped-cwd'])
   })
 
   it('updates thread-workspace-root-hints when workspaceRootHint is provided', async () => {

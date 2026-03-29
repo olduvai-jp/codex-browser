@@ -10,7 +10,6 @@ const props = withDefaults(defineProps<{
   activeThreadId: string
   historyDisplayMode?: HistoryDisplayMode
   canRefresh: boolean
-  historyShowAll: boolean
   historyLoading: boolean
   canLoadMoreHistory: boolean
   isTurnActive: boolean
@@ -24,7 +23,6 @@ const props = withDefaults(defineProps<{
 const emit = defineEmits<{
   refresh: []
   'set-history-display-mode': [mode: HistoryDisplayMode]
-  'toggle-history-scope': []
   'load-more-history': []
   'open-thread': [threadId: string]
   'new-thread': []
@@ -205,15 +203,6 @@ watch(
 
     <!-- View mode toggle -->
     <div class="flex items-center gap-1 px-3 pb-2">
-      <button
-        type="button"
-        class="rounded-md px-2 py-1 text-[11px] font-medium transition-colors"
-        data-testid="history-scope-toggle-button"
-        :class="props.historyShowAll ? 'bg-sidebar-hover text-text-primary' : 'text-text-muted hover:text-text-secondary'"
-        @click="emit('toggle-history-scope')"
-      >
-        {{ props.historyShowAll ? 'このWSのみ' : 'すべて表示' }}
-      </button>
       <button
         type="button"
         class="rounded-md px-2 py-1 text-[11px] font-medium transition-colors"

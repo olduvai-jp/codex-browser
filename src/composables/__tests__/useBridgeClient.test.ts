@@ -231,7 +231,7 @@ describe('useBridgeClient sendTurn', () => {
     wrapper.unmount()
   })
 
-  it('uses cwd-scoped explicit params for history load by default and supports show-all pagination', async () => {
+  it('loads full native history without workspace scope and supports pagination', async () => {
     bridgeMock.setRequestHandler(async (method, params) => {
       if (method === 'initialize') {
         return { userAgent: 'mock-codex-agent' }
@@ -252,20 +252,6 @@ describe('useBridgeClient sendTurn', () => {
           }
         }
 
-        if (request.cwd === '/workspace/current') {
-          return {
-            threads: [
-              {
-                id: 'thread-current-1',
-                title: 'Current 1',
-                cwd: '/workspace/current',
-                updatedAt: '2026-03-15T12:00:00.000Z',
-              },
-            ],
-            nextCursor: 'cursor-2',
-          }
-        }
-
         return {
           threads: [
             {
@@ -281,7 +267,7 @@ describe('useBridgeClient sendTurn', () => {
               updatedAt: '2026-03-14T12:00:00.000Z',
             },
           ],
-          nextCursor: null,
+          nextCursor: 'cursor-2',
         }
       }
       throw new Error(`Unexpected method: ${method}`)
@@ -292,7 +278,6 @@ describe('useBridgeClient sendTurn', () => {
       connect: () => Promise<void>
       loadThreadHistory: () => Promise<void>
       loadMoreThreadHistory: () => Promise<void>
-      toggleHistoryScope: () => Promise<void>
       threadHistory: Array<{ id: string }>
       historyCanLoadMore: boolean
     }
@@ -320,9 +305,8 @@ describe('useBridgeClient sendTurn', () => {
       sortKey: 'updated_at',
       archived: false,
       sourceKinds: [],
-      cwd: '/workspace/current',
     })
-    expect(vm.threadHistory.map((entry) => entry.id)).toEqual(['thread-current-1'])
+    expect(vm.threadHistory.map((entry) => entry.id)).toEqual(['thread-current-1', 'thread-other-1'])
     expect(vm.historyCanLoadMore).toBe(true)
 
     await vm.loadMoreThreadHistory()
@@ -336,24 +320,13 @@ describe('useBridgeClient sendTurn', () => {
       sortKey: 'updated_at',
       archived: false,
       sourceKinds: [],
-      cwd: '/workspace/current',
       cursor: 'cursor-2',
     })
-    expect(vm.threadHistory.map((entry) => entry.id)).toEqual(['thread-current-1', 'thread-current-2'])
-
-    await vm.toggleHistoryScope()
-    await flushPromises()
-
-    const thirdThreadListCall = bridgeMock
-      .getRequestCalls()
-      .filter((call) => call.method === 'thread/list')[2]
-    expect(thirdThreadListCall?.params).toEqual({
-      limit: 25,
-      sortKey: 'updated_at',
-      archived: false,
-      sourceKinds: [],
-    })
-    expect(vm.threadHistory.map((entry) => entry.id)).toEqual(['thread-current-1', 'thread-other-1'])
+    expect(vm.threadHistory.map((entry) => entry.id)).toEqual([
+      'thread-current-1',
+      'thread-other-1',
+      'thread-current-2',
+    ])
 
     wrapper.unmount()
   })
@@ -371,37 +344,24 @@ describe('useBridgeClient sendTurn', () => {
 
     const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
       const url = String(input)
-      const parsedUrl = new URL(url, 'http://localhost')
-      const showAll = parsedUrl.searchParams.get('showAll') === '1'
-      const entries = showAll
-        ? [
-            {
-              id: 'current-newest',
-              title: 'Current newest',
-              updatedAt: '2026-03-22T10:00:00.000Z',
-              cwd: '/workspace/current/project',
-              workspaceRoot: '/workspace/current',
-              workspaceLabel: 'Current',
-            },
-            {
-              id: 'other-newest',
-              title: 'Other newest',
-              updatedAt: '2026-03-23T10:00:00.000Z',
-              cwd: '/workspace/other/project',
-              workspaceRoot: '/workspace/other',
-              workspaceLabel: 'Other',
-            },
-          ]
-        : [
-            {
-              id: 'current-newest',
-              title: 'Current newest',
-              updatedAt: '2026-03-22T10:00:00.000Z',
-              cwd: '/workspace/current/project',
-              workspaceRoot: '/workspace/current',
-              workspaceLabel: 'Current',
-            },
-          ]
+      const entries = [
+        {
+          id: 'current-newest',
+          title: 'Current newest',
+          updatedAt: '2026-03-22T10:00:00.000Z',
+          cwd: '/workspace/current/project',
+          workspaceRoot: '/workspace/current',
+          workspaceLabel: 'Current',
+        },
+        {
+          id: 'other-newest',
+          title: 'Other newest',
+          updatedAt: '2026-03-23T10:00:00.000Z',
+          cwd: '/workspace/other/project',
+          workspaceRoot: '/workspace/other',
+          workspaceLabel: 'Other',
+        },
+      ]
 
       return {
         ok: true,
@@ -415,7 +375,7 @@ describe('useBridgeClient sendTurn', () => {
               '/workspace/other': 'Other',
             },
           },
-          generatedAt: showAll ? '2026-03-23T11:00:00.000Z' : '2026-03-22T11:00:00.000Z',
+          generatedAt: '2026-03-23T11:00:00.000Z',
         }),
       } as Response
     })
@@ -425,7 +385,6 @@ describe('useBridgeClient sendTurn', () => {
     const vm = wrapper.vm as unknown as {
       connect: () => Promise<void>
       setHistoryDisplayMode: (value: string) => Promise<void>
-      toggleHistoryScope: () => Promise<void>
       loadMoreThreadHistory: () => Promise<void>
       historyCanLoadMore: boolean
       workspaceHistoryGroups: Array<{ workspaceKey: string; threads: Array<{ id: string }> }>
@@ -450,50 +409,35 @@ describe('useBridgeClient sendTurn', () => {
 
     expect(fetchMock).toHaveBeenCalledTimes(1)
     expect(String(fetchMock.mock.calls[0]?.[0])).toContain('/api/codex-app/history')
-    expect(String(fetchMock.mock.calls[0]?.[0])).toContain('showAll=0')
-    expect(vm.workspaceHistoryGroups.map((group) => group.workspaceKey)).toEqual(['/workspace/current'])
-    expect(vm.workspaceHistoryGroups[0]?.threads.map((entry) => entry.id)).toEqual(['current-newest'])
+    expect(String(fetchMock.mock.calls[0]?.[0])).not.toContain('showAll=')
+    expect(vm.workspaceHistoryGroups.map((group) => group.workspaceKey)).toEqual([
+      '/workspace/other',
+      '/workspace/current',
+    ])
     expect(vm.historyCanLoadMore).toBe(false)
 
     await vm.loadMoreThreadHistory()
     await flushPromises()
     expect(fetchMock).toHaveBeenCalledTimes(1)
 
-    await vm.toggleHistoryScope()
-    await flushPromises()
-
-    expect(fetchMock).toHaveBeenCalledTimes(2)
-    expect(String(fetchMock.mock.calls[1]?.[0])).toContain('showAll=1')
-    expect(vm.workspaceHistoryGroups.map((group) => group.workspaceKey)).toEqual([
-      '/workspace/other',
-      '/workspace/current',
-    ])
-
     vi.unstubAllGlobals()
     wrapper.unmount()
   })
 
-  it('keeps history scope independent between native and codex-app modes', async () => {
+  it('keeps full history visible across native and codex-app modes', async () => {
     bridgeMock.setRequestHandler(async (method, params) => {
       if (method === 'initialize') {
         return { userAgent: 'mock-codex-agent' }
       }
       if (method === 'thread/list') {
-        const request = params as Record<string, unknown>
-        if (typeof request.cwd === 'string') {
-          return {
-            threads: [
-              {
-                id: 'native-current',
-                title: 'Native current',
-                cwd: '/workspace/current/project',
-                updatedAt: '2026-03-22T11:00:00.000Z',
-              },
-            ],
-          }
-        }
         return {
           threads: [
+            {
+              id: 'native-current',
+              title: 'Native current',
+              cwd: '/workspace/current/project',
+              updatedAt: '2026-03-22T11:00:00.000Z',
+            },
             {
               id: 'native-all',
               title: 'Native all',
@@ -508,37 +452,24 @@ describe('useBridgeClient sendTurn', () => {
 
     const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
       const url = String(input)
-      const parsedUrl = new URL(url, 'http://localhost')
-      const showAll = parsedUrl.searchParams.get('showAll') === '1'
-      const entries = showAll
-        ? [
-            {
-              id: 'codex-other',
-              title: 'Codex other',
-              updatedAt: '2026-03-23T10:00:00.000Z',
-              cwd: '/workspace/other/project',
-              workspaceRoot: '/workspace/other',
-              workspaceLabel: 'Other',
-            },
-            {
-              id: 'codex-current',
-              title: 'Codex current',
-              updatedAt: '2026-03-22T10:00:00.000Z',
-              cwd: '/workspace/current/project',
-              workspaceRoot: '/workspace/current',
-              workspaceLabel: 'Current',
-            },
-          ]
-        : [
-            {
-              id: 'codex-current',
-              title: 'Codex current',
-              updatedAt: '2026-03-22T10:00:00.000Z',
-              cwd: '/workspace/current/project',
-              workspaceRoot: '/workspace/current',
-              workspaceLabel: 'Current',
-            },
-          ]
+      const entries = [
+        {
+          id: 'codex-other',
+          title: 'Codex other',
+          updatedAt: '2026-03-23T10:00:00.000Z',
+          cwd: '/workspace/other/project',
+          workspaceRoot: '/workspace/other',
+          workspaceLabel: 'Other',
+        },
+        {
+          id: 'codex-current',
+          title: 'Codex current',
+          updatedAt: '2026-03-22T10:00:00.000Z',
+          cwd: '/workspace/current/project',
+          workspaceRoot: '/workspace/current',
+          workspaceLabel: 'Current',
+        },
+      ]
 
       return {
         ok: true,
@@ -563,8 +494,8 @@ describe('useBridgeClient sendTurn', () => {
       connect: () => Promise<void>
       loadThreadHistory: () => Promise<void>
       setHistoryDisplayMode: (value: string) => Promise<void>
-      toggleHistoryScope: () => Promise<void>
-      historyShowAll: boolean
+      workspaceHistoryGroups: Array<{ workspaceKey: string }>
+      threadHistory: Array<{ id: string }>
     }
 
     await vm.connect()
@@ -583,24 +514,16 @@ describe('useBridgeClient sendTurn', () => {
 
     await vm.loadThreadHistory()
     await flushPromises()
-    expect(vm.historyShowAll).toBe(false)
+    expect(vm.threadHistory.map((entry) => entry.id)).toEqual(['native-current', 'native-all'])
 
     await vm.setHistoryDisplayMode('codex-app')
     await flushPromises()
-    expect(vm.historyShowAll).toBe(false)
-
-    await vm.toggleHistoryScope()
-    await flushPromises()
-    expect(vm.historyShowAll).toBe(true)
-
-    await vm.setHistoryDisplayMode('native')
-    await flushPromises()
-    expect(vm.historyShowAll).toBe(false)
-
-    await vm.setHistoryDisplayMode('codex-app')
-    await flushPromises()
-    expect(vm.historyShowAll).toBe(true)
-    expect(String(fetchMock.mock.calls[2]?.[0])).toContain('showAll=1')
+    expect(vm.workspaceHistoryGroups.map((group) => group.workspaceKey)).toEqual([
+      '/workspace/other',
+      '/workspace/current',
+      '/workspace/current/project',
+    ])
+    expect(String(fetchMock.mock.calls[0]?.[0])).not.toContain('showAll=')
 
     vi.unstubAllGlobals()
     wrapper.unmount()
@@ -613,7 +536,7 @@ describe('useBridgeClient sendTurn', () => {
       }
       if (method === 'thread/list') {
         const request = params as Record<string, unknown>
-        expect(request.cwd).toBe('/workspace/current/project')
+        expect(request.cwd).toBeUndefined()
         return {
           threads: [
             {
@@ -696,7 +619,7 @@ describe('useBridgeClient sendTurn', () => {
     wrapper.unmount()
   })
 
-  it('keeps scoped codex-app history visible after upsert when cwd does not match known roots', async () => {
+  it('keeps codex-app history visible after upsert when cwd does not match known roots', async () => {
     bridgeMock.setRequestHandler(async (method) => {
       if (method === 'initialize') {
         return { userAgent: 'mock-codex-agent' }
@@ -1011,7 +934,7 @@ describe('useBridgeClient quickStartConversation', () => {
     bridgeMock.reset()
   })
 
-  it('waits for bridge cwd before loading scoped history for auto resume', async () => {
+  it('resumes the latest thread from always-on full history', async () => {
     bridgeMock.setRequestHandler(async (method, params) => {
       if (method === 'initialize') {
         queueMicrotask(() => {
@@ -1033,20 +956,6 @@ describe('useBridgeClient quickStartConversation', () => {
       }
 
       if (method === 'thread/list') {
-        const request = params as Record<string, unknown>
-        if (request.cwd === '/workspace/current') {
-          return {
-            threads: [
-              {
-                id: 'thread-current',
-                title: 'Current workspace thread',
-                cwd: '/workspace/current',
-                updatedAt: '2026-03-15T12:00:00.000Z',
-              },
-            ],
-          }
-        }
-
         return {
           threads: [
             {
@@ -1054,6 +963,12 @@ describe('useBridgeClient quickStartConversation', () => {
               title: 'Other workspace thread',
               cwd: '/workspace/other',
               updatedAt: '2026-03-15T13:00:00.000Z',
+            },
+            {
+              id: 'thread-current',
+              title: 'Current workspace thread',
+              cwd: '/workspace/current',
+              updatedAt: '2026-03-15T12:00:00.000Z',
             },
           ],
         }
@@ -1121,20 +1036,19 @@ describe('useBridgeClient quickStartConversation', () => {
       sortKey: 'updated_at',
       archived: false,
       sourceKinds: [],
-      cwd: '/workspace/current',
     })
     expect(
       bridgeMock.getRequestCalls().find((call) => call.method === 'thread/resume')?.params,
     ).toEqual({
-      threadId: 'thread-current',
+      threadId: 'thread-other',
     })
-    expect(vm.activeThreadId).toBe('thread-current')
-    expect(vm.threadHistory.map((entry) => entry.id)).toEqual(['thread-current'])
+    expect(vm.activeThreadId).toBe('thread-other')
+    expect(vm.threadHistory.map((entry) => entry.id)).toEqual(['thread-other', 'thread-current'])
 
     wrapper.unmount()
   })
 
-  it('starts a new thread with the current cwd when scoped history is empty', async () => {
+  it('starts a new thread with the current cwd when history is empty', async () => {
     bridgeMock.setRequestHandler(async (method, params) => {
       if (method === 'initialize') {
         queueMicrotask(() => {
@@ -1161,7 +1075,6 @@ describe('useBridgeClient quickStartConversation', () => {
           sortKey: 'updated_at',
           archived: false,
           sourceKinds: [],
-          cwd: '/workspace/current',
         })
         return { threads: [] }
       }
@@ -1221,7 +1134,7 @@ describe('useBridgeClient quickStartConversation', () => {
     wrapper.unmount()
   })
 
-  it('recovers delayed bridge cwd before resuming the latest scoped thread', async () => {
+  it('does not depend on delayed bridge cwd when resuming from full history', async () => {
     vi.useFakeTimers()
 
     try {
@@ -1251,14 +1164,13 @@ describe('useBridgeClient quickStartConversation', () => {
             sortKey: 'updated_at',
             archived: false,
             sourceKinds: [],
-            cwd: '/workspace/current',
           })
           return {
             threads: [
               {
-                id: 'thread-delayed-current-newest',
-                title: 'Delayed current workspace newest thread',
-                cwd: '/workspace/current',
+                id: 'thread-delayed-other-newest',
+                title: 'Delayed other workspace newest thread',
+                cwd: '/workspace/other',
                 updatedAt: '2026-03-15T12:30:00.000Z',
               },
               {
@@ -1273,11 +1185,11 @@ describe('useBridgeClient quickStartConversation', () => {
 
         if (method === 'thread/resume') {
           expect(params).toEqual({
-            threadId: 'thread-delayed-current-newest',
+            threadId: 'thread-delayed-other-newest',
           })
           return {
             thread: {
-              id: 'thread-delayed-current-newest',
+              id: 'thread-delayed-other-newest',
               turns: [
                 {
                   id: 'turn-delayed-1',
@@ -1337,9 +1249,9 @@ describe('useBridgeClient quickStartConversation', () => {
       expect(
         bridgeMock.getRequestCalls().find((call) => call.method === 'thread/resume')?.params,
       ).toEqual({
-        threadId: 'thread-delayed-current-newest',
+        threadId: 'thread-delayed-other-newest',
       })
-      expect(vm.activeThreadId).toBe('thread-delayed-current-newest')
+      expect(vm.activeThreadId).toBe('thread-delayed-other-newest')
 
       wrapper.unmount()
     } finally {
@@ -1347,44 +1259,74 @@ describe('useBridgeClient quickStartConversation', () => {
     }
   })
 
-  it('fails safe when quick start cannot determine cwd for scoped history', async () => {
-    vi.useFakeTimers()
-
-    try {
-      bridgeMock.setRequestHandler(async (method) => {
-        if (method === 'initialize') {
-          return { userAgent: 'mock-codex-agent' }
-        }
-
-        if (method === 'model/list') {
-          return { models: [] }
-        }
-
-        throw new Error(`Unexpected method: ${method}`)
-      })
-
-      const wrapper = mount(HostComponent)
-      const vm = wrapper.vm as unknown as {
-        quickStartConversation: () => Promise<void>
-        activeThreadId: string
-        userGuidance: { text: string } | null
+  it('starts a thread without cwd when history is empty and bridge cwd is unresolved', async () => {
+    bridgeMock.setRequestHandler(async (method, params) => {
+      if (method === 'initialize') {
+        return { userAgent: 'mock-codex-agent' }
       }
 
-      const quickStartPromise = vm.quickStartConversation()
-      await flushPromises()
-      await vi.advanceTimersByTimeAsync(1_200)
-      await quickStartPromise
-      await flushPromises()
+      if (method === 'model/list') {
+        return { models: [] }
+      }
 
-      expect(vm.activeThreadId).toBe('')
-      expect(vm.userGuidance?.text).toContain('現在の workspace を特定できないため、自動で会話を開始しませんでした')
-      expect(bridgeMock.getRequestCalls().find((call) => call.method === 'thread/list')).toBeUndefined()
-      expect(bridgeMock.getRequestCalls().find((call) => call.method === 'thread/resume')).toBeUndefined()
-      expect(bridgeMock.getRequestCalls().find((call) => call.method === 'thread/start')).toBeUndefined()
+      if (method === 'thread/list') {
+        expect(params).toEqual({
+          limit: 25,
+          sortKey: 'updated_at',
+          archived: false,
+          sourceKinds: [],
+        })
+        return { threads: [] }
+      }
 
-      wrapper.unmount()
-    } finally {
-      vi.useRealTimers()
+      if (method === 'thread/start') {
+        expect(params).toEqual({
+          experimentalRawEvents: false,
+        })
+        return {
+          thread: {
+            id: 'thread-start-no-cwd',
+          },
+        }
+      }
+
+      if (method === 'config/read') {
+        return {
+          version: 'config-quick-start-no-cwd-1',
+          result: {
+            values: {},
+          },
+        }
+      }
+
+      if (method === 'configRequirements/read') {
+        return {
+          requirements: {
+            allowedApprovalPolicies: ['on-request'],
+            allowedSandboxModes: ['workspace-write'],
+          },
+        }
+      }
+
+      throw new Error(`Unexpected method: ${method}`)
+    })
+
+    const wrapper = mount(HostComponent)
+    const vm = wrapper.vm as unknown as {
+      quickStartConversation: () => Promise<void>
+      activeThreadId: string
+      userGuidance: { text: string } | null
     }
+
+    await vm.quickStartConversation()
+    await flushPromises()
+
+    expect(vm.activeThreadId).toBe('thread-start-no-cwd')
+    expect(vm.userGuidance).toBeNull()
+    expect(
+      bridgeMock.getRequestCalls().find((call) => call.method === 'thread/resume'),
+    ).toBeUndefined()
+
+    wrapper.unmount()
   })
 })

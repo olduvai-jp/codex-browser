@@ -44,6 +44,7 @@ export type CodexAppHistoryResponse = {
 export type CodexAppHistoryOptions = {
   codexHome?: string
   now?: () => Date
+  // Legacy params kept for compatibility with older callers and ignored by the server.
   showAll?: boolean
   cwd?: string
 }
@@ -451,30 +452,6 @@ function sortCodexAppHistoryEntries(entries: CodexAppHistoryEntry[]): CodexAppHi
   })
 }
 
-function filterCodexAppHistoryEntriesByScope(
-  entries: CodexAppHistoryEntry[],
-  globalState: GlobalStateSnapshot,
-  showAll: boolean,
-  cwd?: string,
-): CodexAppHistoryEntry[] {
-  if (showAll) {
-    return entries
-  }
-
-  const normalizedCwd = typeof cwd === 'string' ? cwd.trim() : ''
-  if (normalizedCwd.length === 0) {
-    return entries
-  }
-
-  const resolvedCwd = normalizePath(normalizedCwd)
-  const workspaceRoot = findBestMatchingRoot(resolvedCwd, globalState.savedRoots)
-  if (workspaceRoot) {
-    return entries.filter((entry) => entry.workspaceRoot === workspaceRoot)
-  }
-
-  return entries.filter((entry) => entry.cwd === resolvedCwd)
-}
-
 async function readSessionMetaCwd(filePath: string): Promise<string | undefined> {
   const stream = createReadStream(filePath, { encoding: 'utf8' })
   const lines = createInterface({
@@ -519,7 +496,6 @@ export async function listCodexAppHistory(
 ): Promise<CodexAppHistoryResponse> {
   const codexHome = options.codexHome ?? join(homedir(), '.codex')
   const now = options.now ?? (() => new Date())
-  const showAll = options.showAll ?? false
 
   const [sessionIndex, globalState, sessionFiles] = await Promise.all([
     readSessionIndex(codexHome),
@@ -550,10 +526,8 @@ export async function listCodexAppHistory(
     })
   }
 
-  const scopedEntries = filterCodexAppHistoryEntriesByScope(entries, globalState, showAll, options.cwd)
-
   return {
-    entries: sortCodexAppHistoryEntries(scopedEntries),
+    entries: sortCodexAppHistoryEntries(entries),
     roots: {
       activeRoots: globalState.activeRoots,
       savedRoots: globalState.savedRoots,

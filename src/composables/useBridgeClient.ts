@@ -62,8 +62,6 @@ import type {
 const DEFAULT_WS_URL = 'ws://127.0.0.1:8787/bridge'
 const MAX_THREADS_PER_WORKSPACE_GROUP = 50
 const HISTORY_PAGE_SIZE = 25
-const QUICK_START_CWD_WAIT_MS = 150
-const QUICK_START_CWD_RECOVERY_WAIT_MS = 1000
 const MAX_TOOL_CALL_ENTRIES = 100
 const MAX_TOOL_CALL_EVENTS = 40
 const REASONING_EFFORT_SET = new Set<string>(REASONING_EFFORT_VALUES)
@@ -350,47 +348,6 @@ function compareCodexAppHistoryEntries(left: ThreadHistoryEntry, right: ThreadHi
 
 function sortCodexAppHistoryEntries(entries: ThreadHistoryEntry[]): ThreadHistoryEntry[] {
   return [...entries].sort(compareCodexAppHistoryEntries)
-}
-
-function filterCodexAppOverlayEntriesByScope(
-  entries: CodexAppOverlayEntry[],
-  showAll: boolean,
-  bridgeCwd: string,
-  roots: CodexAppProjectRootsSnapshot,
-): CodexAppOverlayEntry[] {
-  if (showAll) {
-    return [...entries]
-  }
-
-  const normalizedBridgeCwd = bridgeCwd.trim()
-  if (normalizedBridgeCwd.length === 0) {
-    return [...entries]
-  }
-
-  const resolvedBridgeCwd = normalizePath(normalizedBridgeCwd)
-  const workspaceRoot = findBestMatchingRoot(resolvedBridgeCwd, roots.savedRoots)
-  if (workspaceRoot) {
-    return entries.filter((entry) => {
-      const overlayWorkspaceRoot = entry.workspaceRoot?.trim()
-      if (overlayWorkspaceRoot && overlayWorkspaceRoot.length > 0) {
-        return normalizePath(overlayWorkspaceRoot) === workspaceRoot
-      }
-
-      const overlayScopeCwd = entry.scopeCwd?.trim()
-      if (!overlayScopeCwd || overlayScopeCwd.length === 0) {
-        return false
-      }
-      return isPathBoundaryPrefix(workspaceRoot, normalizePath(overlayScopeCwd))
-    })
-  }
-
-  return entries.filter((entry) => {
-    const overlayScopeCwd = entry.scopeCwd?.trim()
-    if (!overlayScopeCwd || overlayScopeCwd.length === 0) {
-      return false
-    }
-    return normalizePath(overlayScopeCwd) === resolvedBridgeCwd
-  })
 }
 
 function mergeCodexAppHistoryEntries(
@@ -823,8 +780,6 @@ export function useBridgeClient() {
   const userGuidance = ref<UserGuidance | null>(null)
   const bridgeCwd = ref('')
   const historyDisplayMode = ref<HistoryDisplayMode>('native')
-  const nativeHistoryShowAll = ref(false)
-  const codexAppHistoryShowAll = ref(false)
   const historyNextCursor = ref('')
   const historyLoading = ref(false)
   const historyTitleOverridesByThreadId = ref<Record<string, string>>({})
@@ -973,9 +928,6 @@ export function useBridgeClient() {
     () => connectionState.value !== 'connecting' && !quickStartInProgress.value && !isTurnActive.value,
   )
   const isCodexAppHistoryMode = computed(() => historyDisplayMode.value === 'codex-app')
-  const historyShowAll = computed(() =>
-    isCodexAppHistoryMode.value ? codexAppHistoryShowAll.value : nativeHistoryShowAll.value,
-  )
   const visibleHistoryEntries = computed<ThreadHistoryEntry[]>(() =>
     isCodexAppHistoryMode.value ? codexAppHistoryEntries.value : threadHistory.value,
   )
@@ -1065,7 +1017,6 @@ export function useBridgeClient() {
   watch(
     () => ({
       bridgeCwd: bridgeCwd.value,
-      showAll: codexAppHistoryShowAll.value,
       activeRoots: codexAppRoots.value.activeRoots.join('|'),
       savedRoots: codexAppRoots.value.savedRoots.join('|'),
       labels: Object.entries(codexAppRoots.value.labels)
@@ -1153,62 +1104,8 @@ export function useBridgeClient() {
     if (normalizedCursor.length > 0) {
       params.cursor = normalizedCursor
     }
-    const resolvedCwd = bridgeCwd.value.trim()
-    if (!nativeHistoryShowAll.value && resolvedCwd.length > 0) {
-      params.cwd = resolvedCwd
-    }
 
     return params
-  }
-
-  async function waitForBridgeCwd(timeoutMs: number): Promise<string | null> {
-    const resolvedCwd = bridgeCwd.value.trim()
-    if (resolvedCwd.length > 0) {
-      return resolvedCwd
-    }
-
-    return await new Promise<string | null>((resolve) => {
-      let settled = false
-      const timeoutId = window.setTimeout(() => {
-        finish(null)
-      }, timeoutMs)
-      const stopWatching = watch(bridgeCwd, (value) => {
-        const nextCwd = value.trim()
-        if (nextCwd.length > 0) {
-          finish(nextCwd)
-        }
-      })
-
-      function finish(result: string | null): void {
-        if (settled) {
-          return
-        }
-
-        settled = true
-        window.clearTimeout(timeoutId)
-        stopWatching()
-        resolve(result)
-      }
-    })
-  }
-
-  async function waitForQuickStartHistoryScope(): Promise<string | null> {
-    if (nativeHistoryShowAll.value) {
-      return ''
-    }
-
-    const fastPathCwd = await waitForBridgeCwd(QUICK_START_CWD_WAIT_MS)
-    if (fastPathCwd) {
-      return fastPathCwd
-    }
-
-    pushLog('rpc', 'info', 'Quick start awaiting late bridge cwd before scoped history resume.', {
-      waitMs: QUICK_START_CWD_WAIT_MS,
-      recoveryWaitMs: QUICK_START_CWD_RECOVERY_WAIT_MS,
-      showAll: nativeHistoryShowAll.value,
-    })
-
-    return await waitForBridgeCwd(QUICK_START_CWD_RECOVERY_WAIT_MS)
   }
 
   function resolveTitleCandidateFromUserMessage(text: string): string | null {
@@ -1272,15 +1169,9 @@ export function useBridgeClient() {
   }
 
   function recomputeCodexAppHistoryEntries(): void {
-    const scopedOverlayEntries = filterCodexAppOverlayEntriesByScope(
-      codexAppHistoryOverlayEntries.value,
-      codexAppHistoryShowAll.value,
-      bridgeCwd.value,
-      codexAppRoots.value,
-    )
     codexAppHistoryEntries.value = mergeCodexAppHistoryEntries(
       codexAppServerHistoryEntries.value,
-      scopedOverlayEntries,
+      codexAppHistoryOverlayEntries.value,
     )
   }
 
@@ -2730,32 +2621,19 @@ function parseToolUserInputQuestions(params: Record<string, unknown>): ToolUserI
       }
 
       let preferredThreadId = ''
-      const historyScopeCwd = await waitForQuickStartHistoryScope()
-      if (historyScopeCwd !== null) {
-        await loadThreadHistory()
-        preferredThreadId =
-          selectedHistoryThreadId.value.trim().length > 0
-            ? selectedHistoryThreadId.value.trim()
-            : (visibleHistoryEntries.value[0]?.id ?? '')
-      } else {
-        pushLog('rpc', 'warn', 'Quick start could not determine bridge cwd safely; skipped auto resume.', {
-          initialWaitMs: QUICK_START_CWD_WAIT_MS,
-          recoveryWaitMs: QUICK_START_CWD_RECOVERY_WAIT_MS,
-          showAll: nativeHistoryShowAll.value,
-        })
-        setUserGuidance(
-          'warn',
-          '現在の workspace を特定できないため、自動で会話を開始しませんでした。Bridge の起動完了後に再試行してください。',
-        )
-        return
-      }
+      await loadThreadHistory()
+      preferredThreadId =
+        selectedHistoryThreadId.value.trim().length > 0
+          ? selectedHistoryThreadId.value.trim()
+          : (visibleHistoryEntries.value[0]?.id ?? '')
 
       if (preferredThreadId.length > 0) {
         await resumeThread(preferredThreadId)
       }
 
       if (activeThreadId.value.trim().length === 0) {
-        await startThread(nativeHistoryShowAll.value ? undefined : historyScopeCwd)
+        const resolvedCwd = bridgeCwd.value.trim()
+        await startThread(resolvedCwd.length > 0 ? resolvedCwd : undefined)
       }
 
       await loadConfig()
@@ -2900,11 +2778,6 @@ function parseToolUserInputQuestions(params: Record<string, unknown>): ToolUserI
     try {
       historyLoading.value = true
       const url = new URL('/api/codex-app/history', window.location.origin)
-      url.searchParams.set('showAll', codexAppHistoryShowAll.value ? '1' : '0')
-      const resolvedCwd = bridgeCwd.value.trim()
-      if (resolvedCwd.length > 0) {
-        url.searchParams.set('cwd', resolvedCwd)
-      }
 
       const response = await fetch(url.toString())
       if (!response.ok) {
@@ -2948,7 +2821,6 @@ function parseToolUserInputQuestions(params: Record<string, unknown>): ToolUserI
 
       pushLog('rpc', 'info', `codex-app history loaded (${codexAppHistoryEntries.value.length} threads)`, {
         total: codexAppHistoryEntries.value.length,
-        showAll: codexAppHistoryShowAll.value,
         generatedAt: codexAppHistoryGeneratedAt.value || null,
       })
     } catch (error) {
@@ -3032,7 +2904,6 @@ function parseToolUserInputQuestions(params: Record<string, unknown>): ToolUserI
         total: nextHistory.length,
         workspaceCount: workspaceKeys.size,
         bridgeCwd: bridgeCwd.value.trim() || null,
-        showAll: nativeHistoryShowAll.value,
         hasNextCursor: historyNextCursor.value.length > 0,
         pageSize: HISTORY_PAGE_SIZE,
         append,
@@ -3043,16 +2914,6 @@ function parseToolUserInputQuestions(params: Record<string, unknown>): ToolUserI
     } finally {
       historyLoading.value = false
     }
-  }
-
-  async function toggleHistoryScope(): Promise<void> {
-    if (isCodexAppHistoryMode.value) {
-      codexAppHistoryShowAll.value = !codexAppHistoryShowAll.value
-    } else {
-      nativeHistoryShowAll.value = !nativeHistoryShowAll.value
-    }
-    historyNextCursor.value = ''
-    await loadThreadHistory()
   }
 
   async function readThread(threadId?: string): Promise<void> {
@@ -3624,7 +3485,6 @@ function parseToolUserInputQuestions(params: Record<string, unknown>): ToolUserI
     quickStartInProgress,
     userGuidance,
     historyDisplayMode,
-    historyShowAll,
     historyLoading,
     codexAppHistoryEntries,
     messages,
@@ -3671,7 +3531,6 @@ function parseToolUserInputQuestions(params: Record<string, unknown>): ToolUserI
     loadThreadHistory,
     loadMoreThreadHistory,
     setHistoryDisplayMode,
-    toggleHistoryScope,
     readThread,
     resumeThread,
     sendTurn,

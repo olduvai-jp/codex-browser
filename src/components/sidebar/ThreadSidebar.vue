@@ -1,13 +1,14 @@
 <script setup lang="ts">
 import { ref, computed, watch } from 'vue'
 
-import type { ConnectionState, WorkspaceHistoryGroup, ThreadHistoryEntry } from '@/types'
+import type { ConnectionState, HistoryDisplayMode, WorkspaceHistoryGroup, ThreadHistoryEntry } from '@/types'
 import ThreadHistoryItem from './ThreadHistoryItem.vue'
 
-const props = defineProps<{
+const props = withDefaults(defineProps<{
   workspaceGroups: WorkspaceHistoryGroup[]
   selectedThreadId: string
   activeThreadId: string
+  historyDisplayMode?: HistoryDisplayMode
   canRefresh: boolean
   historyShowAll: boolean
   historyLoading: boolean
@@ -16,10 +17,13 @@ const props = defineProps<{
   advancedPanelOpen: boolean
   isConnected: boolean
   connectionState: ConnectionState
-}>()
+}>(), {
+  historyDisplayMode: 'native',
+})
 
 const emit = defineEmits<{
   refresh: []
+  'set-history-display-mode': [mode: HistoryDisplayMode]
   'toggle-history-scope': []
   'load-more-history': []
   'open-thread': [threadId: string]
@@ -33,6 +37,7 @@ const emit = defineEmits<{
 }>()
 
 const viewMode = ref<'flat' | 'grouped'>('flat')
+const isCodexAppMode = computed(() => props.historyDisplayMode === 'codex-app')
 
 type FlatThread = ThreadHistoryEntry & { workspaceLabel: string }
 
@@ -46,7 +51,14 @@ const flatThreads = computed<FlatThread[]>(() => {
   threads.sort((a, b) => {
     const aTime = a.updatedAt ? new Date(a.updatedAt).getTime() : 0
     const bTime = b.updatedAt ? new Date(b.updatedAt).getTime() : 0
-    return bTime - aTime
+    if (aTime !== bTime) {
+      return bTime - aTime
+    }
+    const titleCompare = a.title.localeCompare(b.title)
+    if (titleCompare !== 0) {
+      return titleCompare
+    }
+    return a.id.localeCompare(b.id)
   })
   return threads
 })
@@ -157,6 +169,27 @@ watch(
       </div>
     </div>
 
+    <div class="flex items-center gap-1 px-3 pb-2">
+      <button
+        type="button"
+        class="rounded-md px-2 py-1 text-[11px] font-medium transition-colors"
+        data-testid="history-display-native-button"
+        :class="!isCodexAppMode ? 'bg-sidebar-hover text-text-primary' : 'text-text-muted hover:text-text-secondary'"
+        @click="emit('set-history-display-mode', 'native')"
+      >
+        Native
+      </button>
+      <button
+        type="button"
+        class="rounded-md px-2 py-1 text-[11px] font-medium transition-colors"
+        data-testid="history-display-codex-button"
+        :class="isCodexAppMode ? 'bg-sidebar-hover text-text-primary' : 'text-text-muted hover:text-text-secondary'"
+        @click="emit('set-history-display-mode', 'codex-app')"
+      >
+        Codex.app
+      </button>
+    </div>
+
     <!-- View mode toggle -->
     <div class="flex items-center gap-1 px-3 pb-2">
       <button
@@ -169,6 +202,7 @@ watch(
         {{ props.historyShowAll ? 'このWSのみ' : 'すべて表示' }}
       </button>
       <button
+        v-if="!isCodexAppMode"
         type="button"
         class="rounded-md px-2 py-1 text-[11px] font-medium transition-colors"
         :class="viewMode === 'flat' ? 'bg-sidebar-hover text-text-primary' : 'text-text-muted hover:text-text-secondary'"
@@ -177,6 +211,7 @@ watch(
         新しい順
       </button>
       <button
+        v-if="!isCodexAppMode"
         type="button"
         class="rounded-md px-2 py-1 text-[11px] font-medium transition-colors"
         :class="viewMode === 'grouped' ? 'bg-sidebar-hover text-text-primary' : 'text-text-muted hover:text-text-secondary'"
@@ -196,7 +231,7 @@ watch(
       </p>
 
       <!-- Flat view -->
-      <template v-if="viewMode === 'flat'">
+      <template v-if="isCodexAppMode || viewMode === 'flat'">
         <ThreadHistoryItem
           v-for="entry in flatThreads"
           :key="entry.id"
@@ -281,7 +316,7 @@ watch(
       </template>
     </div>
 
-    <div class="px-3 pb-3">
+    <div v-if="!isCodexAppMode" class="px-3 pb-3">
       <button
         type="button"
         class="w-full rounded-lg border border-border-default px-3 py-2 text-xs font-medium transition-colors disabled:cursor-not-allowed disabled:opacity-40"

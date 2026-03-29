@@ -27,6 +27,7 @@ const {
   selectedThinkingEffort,
   configSnapshot,
   userGuidance,
+  historyDisplayMode,
   historyShowAll,
   historyLoading,
   logs,
@@ -66,6 +67,7 @@ const {
   listDirectories,
   loadThreadHistory,
   loadMoreThreadHistory,
+  setHistoryDisplayMode,
   resumeThread,
   sendTurn,
   interruptTurn,
@@ -114,6 +116,7 @@ onMounted(() => {
           :workspace-groups="workspaceHistoryGroups"
           :selected-thread-id="selectedHistoryThreadId"
           :active-thread-id="activeThreadId"
+          :history-display-mode="historyDisplayMode"
           :can-refresh="isConnected && initialized"
           :history-show-all="historyShowAll"
           :history-loading="historyLoading"
@@ -123,6 +126,7 @@ onMounted(() => {
           :is-connected="isConnected"
           :connection-state="connectionState"
           @refresh="loadThreadHistory"
+          @set-history-display-mode="setHistoryDisplayMode"
           @toggle-history-scope="toggleHistoryScope"
           @load-more-history="loadMoreThreadHistory"
           @open-thread="resumeThread($event)"

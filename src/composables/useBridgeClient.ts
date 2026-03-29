@@ -33,7 +33,10 @@ import {
 } from '@/types'
 import type {
   ApprovalMethodExplanation,
+  CodexAppHistoryResponse,
+  CodexAppProjectRootsSnapshot,
   ConnectionState,
+  HistoryDisplayMode,
   LogEntry,
   ModelOption,
   ReasoningEffort,
@@ -80,6 +83,7 @@ type ToolUserInputAnswers = Record<string, { answers: string[] }>
 type TimelineTurnStatusEntry = Omit<TimelineTurnStatusItem, 'kind'>
 type TimelineApprovalEntry = Omit<TimelineApprovalItem, 'kind'>
 type TimelineToolUserInputEntry = Omit<TimelineToolUserInputItem, 'kind'>
+const HISTORY_DISPLAY_MODE_SET = new Set<HistoryDisplayMode>(['native', 'codex-app'])
 
 function isReasoningEffort(value: string): value is ReasoningEffort {
   return REASONING_EFFORT_SET.has(value)
@@ -149,6 +153,173 @@ function sortThreadHistoryByUpdatedAt(entries: ThreadHistoryEntry[]): ThreadHist
       return right.updatedAtMs - left.updatedAtMs
     })
     .map(({ entry }) => entry)
+}
+
+function isHistoryDisplayMode(value: string): value is HistoryDisplayMode {
+  return HISTORY_DISPLAY_MODE_SET.has(value as HistoryDisplayMode)
+}
+
+function normalizePath(value: string): string {
+  const trimmed = value.trim()
+  if (trimmed.length === 0 || trimmed === '/') {
+    return trimmed
+  }
+  return trimmed.replace(/\/+$/, '')
+}
+
+function isPathBoundaryPrefix(prefix: string, target: string): boolean {
+  const normalizedPrefix = normalizePath(prefix)
+  const normalizedTarget = normalizePath(target)
+  if (normalizedPrefix.length === 0 || normalizedTarget.length === 0) {
+    return false
+  }
+  if (normalizedPrefix === normalizedTarget) {
+    return true
+  }
+
+  return normalizedTarget.startsWith(`${normalizedPrefix}/`)
+}
+
+function pickStringArray(value: unknown): string[] {
+  if (!Array.isArray(value)) {
+    return []
+  }
+
+  return value
+    .filter((entry): entry is string => typeof entry === 'string')
+    .map((entry) => entry.trim())
+    .filter((entry) => entry.length > 0)
+}
+
+function parseCodexAppRoots(payload: unknown): CodexAppProjectRootsSnapshot {
+  const defaultRoots: CodexAppProjectRootsSnapshot = {
+    activeRoots: [],
+    savedRoots: [],
+    labels: {},
+  }
+  if (!isRecord(payload)) {
+    return defaultRoots
+  }
+
+  const activeRoots = pickStringArray(payload.activeRoots ?? payload.active_roots)
+  const savedRoots = pickStringArray(payload.savedRoots ?? payload.saved_roots)
+  const rawLabels = isRecord(payload.labels)
+    ? payload.labels
+    : (isRecord(payload.workspaceLabels)
+      ? payload.workspaceLabels
+      : (isRecord(payload.workspace_labels) ? payload.workspace_labels : null))
+  const labels: Record<string, string> = {}
+  if (rawLabels) {
+    for (const [rawKey, rawValue] of Object.entries(rawLabels)) {
+      if (typeof rawValue !== 'string') {
+        continue
+      }
+      const key = rawKey.trim()
+      const value = rawValue.trim()
+      if (key.length === 0 || value.length === 0) {
+        continue
+      }
+      labels[key] = value
+    }
+  }
+
+  return {
+    activeRoots,
+    savedRoots,
+    labels,
+  }
+}
+
+function normalizeCodexAppHistoryEntry(value: unknown): ThreadHistoryEntry | null {
+  if (!isRecord(value)) {
+    return null
+  }
+
+  const id = pickStringValue(value, ['id', 'threadId', 'thread_id', 'sessionId', 'session_id'])
+  if (!id) {
+    return null
+  }
+
+  const title =
+    pickStringValue(value, ['title', 'thread_name', 'threadName', 'name']) ??
+    id
+  const updatedAt =
+    pickStringValue(value, ['updatedAt', 'updated_at', 'lastUpdatedAt', 'last_updated_at']) ?? undefined
+  const cwd = pickStringValue(value, ['cwd']) ?? undefined
+  const workspaceRoot =
+    pickStringValue(value, ['workspaceRoot', 'workspace_root']) ?? undefined
+  const workspaceLabel =
+    pickStringValue(value, ['workspaceLabel', 'workspace_label']) ?? undefined
+
+  return {
+    id,
+    title,
+    updatedAt,
+    cwd,
+    workspaceRoot,
+    workspaceLabel,
+    source: 'codex-app',
+  }
+}
+
+function parseCodexAppHistoryResponse(payload: unknown): CodexAppHistoryResponse | null {
+  if (!isRecord(payload)) {
+    return null
+  }
+
+  const rawEntries = Array.isArray(payload.entries)
+    ? payload.entries
+    : (isRecord(payload.result) && Array.isArray(payload.result.entries)
+      ? payload.result.entries
+      : [])
+  const entries = rawEntries
+    .map((entry) => normalizeCodexAppHistoryEntry(entry))
+    .filter((entry): entry is ThreadHistoryEntry => entry !== null)
+  const rootsPayload = isRecord(payload.roots)
+    ? payload.roots
+    : (isRecord(payload.result) && isRecord(payload.result.roots) ? payload.result.roots : {})
+  const generatedAt =
+    pickStringValue(payload, ['generatedAt', 'generated_at']) ??
+    (isRecord(payload.result)
+      ? (pickStringValue(payload.result, ['generatedAt', 'generated_at']) ?? undefined)
+      : undefined)
+
+  return {
+    entries,
+    roots: parseCodexAppRoots(rootsPayload),
+    generatedAt,
+  }
+}
+
+function compareCodexAppHistoryEntries(left: ThreadHistoryEntry, right: ThreadHistoryEntry): number {
+  const leftUpdatedAtMs = parseUpdatedAtMs(left.updatedAt)
+  const rightUpdatedAtMs = parseUpdatedAtMs(right.updatedAt)
+  if (leftUpdatedAtMs == null && rightUpdatedAtMs == null) {
+    const titleCompare = left.title.localeCompare(right.title)
+    if (titleCompare !== 0) {
+      return titleCompare
+    }
+    return left.id.localeCompare(right.id)
+  }
+  if (leftUpdatedAtMs == null) {
+    return 1
+  }
+  if (rightUpdatedAtMs == null) {
+    return -1
+  }
+  if (leftUpdatedAtMs !== rightUpdatedAtMs) {
+    return rightUpdatedAtMs - leftUpdatedAtMs
+  }
+
+  const titleCompare = left.title.localeCompare(right.title)
+  if (titleCompare !== 0) {
+    return titleCompare
+  }
+  return left.id.localeCompare(right.id)
+}
+
+function sortCodexAppHistoryEntries(entries: ThreadHistoryEntry[]): ThreadHistoryEntry[] {
+  return [...entries].sort(compareCodexAppHistoryEntries)
 }
 
 function resolveBridgeWsUrl(): string {
@@ -416,13 +587,23 @@ function extractThreadHistoryNextCursor(payload: unknown): string | null {
 }
 
 function resolveWorkspaceKeyForThread(entry: ThreadHistoryEntry): string {
+  const normalizedWorkspaceRoot = entry.workspaceRoot?.trim() ?? ''
+  if (normalizedWorkspaceRoot.length > 0) {
+    return normalizedWorkspaceRoot
+  }
+
   const normalizedCwd = entry.cwd?.trim() ?? ''
-  return normalizedCwd.length > 0 ? normalizedCwd : UNKNOWN_WORKSPACE_LABEL
+  if (normalizedCwd.length > 0) {
+    return normalizedCwd
+  }
+
+  return UNKNOWN_WORKSPACE_LABEL
 }
 
 function groupThreadHistoryByWorkspace(
   entries: ThreadHistoryEntry[],
   bridgeCwd: string,
+  usePrefixForCurrentWorkspace: boolean,
 ): WorkspaceHistoryGroup[] {
   const normalizedBridgeCwd = bridgeCwd.trim()
   const grouped = new Map<
@@ -444,6 +625,9 @@ function groupThreadHistoryByWorkspace(
     const updatedAtMs = parseUpdatedAtMs(entry.updatedAt)
     if (existingGroup) {
       existingGroup.threadCount += 1
+      if (entry.workspaceLabel?.trim()) {
+        existingGroup.workspaceLabel = entry.workspaceLabel.trim()
+      }
       if (existingGroup.threads.length < MAX_THREADS_PER_WORKSPACE_GROUP) {
         existingGroup.threads.push(entry)
       }
@@ -459,16 +643,23 @@ function groupThreadHistoryByWorkspace(
 
     grouped.set(workspaceKey, {
       workspaceKey,
-      workspaceLabel: workspaceKey.split('/').filter(Boolean).pop() || workspaceKey,
+      workspaceLabel:
+        entry.workspaceLabel?.trim() ||
+        workspaceKey.split('/').filter(Boolean).pop() ||
+        workspaceKey,
       threads: [entry],
       threadCount: 1,
       latestUpdatedAt: entry.updatedAt,
       latestUpdatedAtMs: updatedAtMs,
-      isCurrentWorkspace: normalizedBridgeCwd.length > 0 && workspaceKey === normalizedBridgeCwd,
+      isCurrentWorkspace:
+        normalizedBridgeCwd.length > 0 &&
+        (workspaceKey === normalizedBridgeCwd ||
+          (usePrefixForCurrentWorkspace && isPathBoundaryPrefix(workspaceKey, normalizedBridgeCwd))),
     })
   }
 
-  if (normalizedBridgeCwd.length > 0 && !grouped.has(normalizedBridgeCwd)) {
+  const hasCurrentWorkspace = [...grouped.values()].some((group) => group.isCurrentWorkspace)
+  if (normalizedBridgeCwd.length > 0 && !hasCurrentWorkspace) {
     grouped.set(normalizedBridgeCwd, {
       workspaceKey: normalizedBridgeCwd,
       workspaceLabel: normalizedBridgeCwd.split('/').filter(Boolean).pop() || normalizedBridgeCwd,
@@ -535,10 +726,19 @@ export function useBridgeClient() {
   const quickStartInProgress = ref(false)
   const userGuidance = ref<UserGuidance | null>(null)
   const bridgeCwd = ref('')
-  const historyShowAll = ref(false)
+  const historyDisplayMode = ref<HistoryDisplayMode>('native')
+  const nativeHistoryShowAll = ref(false)
+  const codexAppHistoryShowAll = ref(false)
   const historyNextCursor = ref('')
   const historyLoading = ref(false)
   const historyTitleOverridesByThreadId = ref<Record<string, string>>({})
+  const codexAppHistoryEntries = ref<ThreadHistoryEntry[]>([])
+  const codexAppRoots = ref<CodexAppProjectRootsSnapshot>({
+    activeRoots: [],
+    savedRoots: [],
+    labels: {},
+  })
+  const codexAppHistoryGeneratedAt = ref('')
 
   const messages = ref<UiMessage[]>([])
   const logs = ref<LogEntry[]>([])
@@ -673,15 +873,23 @@ export function useBridgeClient() {
   const canQuickStartConversation = computed(
     () => connectionState.value !== 'connecting' && !quickStartInProgress.value && !isTurnActive.value,
   )
+  const isCodexAppHistoryMode = computed(() => historyDisplayMode.value === 'codex-app')
+  const historyShowAll = computed(() =>
+    isCodexAppHistoryMode.value ? codexAppHistoryShowAll.value : nativeHistoryShowAll.value,
+  )
+  const visibleHistoryEntries = computed<ThreadHistoryEntry[]>(() =>
+    isCodexAppHistoryMode.value ? codexAppHistoryEntries.value : threadHistory.value,
+  )
   const historyCanLoadMore = computed(
     () =>
+      !isCodexAppHistoryMode.value &&
       isConnected.value &&
       initialized.value &&
       !historyLoading.value &&
       historyNextCursor.value.trim().length > 0,
   )
   const workspaceHistoryGroups = computed<WorkspaceHistoryGroup[]>(() =>
-    groupThreadHistoryByWorkspace(threadHistory.value, bridgeCwd.value),
+    groupThreadHistoryByWorkspace(visibleHistoryEntries.value, bridgeCwd.value, isCodexAppHistoryMode.value),
   )
   const timelineItems = computed<TimelineItem[]>(() => {
     const items: TimelineItem[] = []
@@ -820,7 +1028,7 @@ export function useBridgeClient() {
       params.cursor = normalizedCursor
     }
     const resolvedCwd = bridgeCwd.value.trim()
-    if (!historyShowAll.value && resolvedCwd.length > 0) {
+    if (!nativeHistoryShowAll.value && resolvedCwd.length > 0) {
       params.cwd = resolvedCwd
     }
 
@@ -859,7 +1067,7 @@ export function useBridgeClient() {
   }
 
   async function waitForQuickStartHistoryScope(): Promise<string | null> {
-    if (historyShowAll.value) {
+    if (nativeHistoryShowAll.value) {
       return ''
     }
 
@@ -871,7 +1079,7 @@ export function useBridgeClient() {
     pushLog('rpc', 'info', 'Quick start awaiting late bridge cwd before scoped history resume.', {
       waitMs: QUICK_START_CWD_WAIT_MS,
       recoveryWaitMs: QUICK_START_CWD_RECOVERY_WAIT_MS,
-      showAll: historyShowAll.value,
+      showAll: nativeHistoryShowAll.value,
     })
 
     return await waitForBridgeCwd(QUICK_START_CWD_RECOVERY_WAIT_MS)
@@ -2218,6 +2426,9 @@ function parseToolUserInputQuestions(params: Record<string, unknown>): ToolUserI
     executionModeConfigVersion.value = ''
     isExecutionModeSaving.value = false
     bridgeCwd.value = ''
+    codexAppHistoryEntries.value = []
+    codexAppRoots.value = { activeRoots: [], savedRoots: [], labels: {} }
+    codexAppHistoryGeneratedAt.value = ''
     connectionState.value = 'disconnected'
   }
 
@@ -2314,12 +2525,12 @@ function parseToolUserInputQuestions(params: Record<string, unknown>): ToolUserI
         preferredThreadId =
           selectedHistoryThreadId.value.trim().length > 0
             ? selectedHistoryThreadId.value.trim()
-            : (threadHistory.value[0]?.id ?? '')
+            : (visibleHistoryEntries.value[0]?.id ?? '')
       } else {
         pushLog('rpc', 'warn', 'Quick start could not determine bridge cwd safely; skipped auto resume.', {
           initialWaitMs: QUICK_START_CWD_WAIT_MS,
           recoveryWaitMs: QUICK_START_CWD_RECOVERY_WAIT_MS,
-          showAll: historyShowAll.value,
+          showAll: nativeHistoryShowAll.value,
         })
         setUserGuidance(
           'warn',
@@ -2333,7 +2544,7 @@ function parseToolUserInputQuestions(params: Record<string, unknown>): ToolUserI
       }
 
       if (activeThreadId.value.trim().length === 0) {
-        await startThread(historyShowAll.value ? undefined : historyScopeCwd)
+        await startThread(nativeHistoryShowAll.value ? undefined : historyScopeCwd)
       }
 
       await loadConfig()
@@ -2438,11 +2649,97 @@ function parseToolUserInputQuestions(params: Record<string, unknown>): ToolUserI
     }
   }
 
+  async function loadCodexAppHistory(): Promise<void> {
+    if (!isConnected.value || !initialized.value) {
+      return
+    }
+    if (historyLoading.value) {
+      return
+    }
+
+    try {
+      historyLoading.value = true
+      const url = new URL('/api/codex-app/history', window.location.origin)
+      url.searchParams.set('showAll', codexAppHistoryShowAll.value ? '1' : '0')
+      const resolvedCwd = bridgeCwd.value.trim()
+      if (resolvedCwd.length > 0) {
+        url.searchParams.set('cwd', resolvedCwd)
+      }
+
+      const response = await fetch(url.toString())
+      if (!response.ok) {
+        const body = await response.json().catch(() => ({}))
+        pushLog(
+          'rpc',
+          'warn',
+          `Codex.app history fetch failed: ${(body as Record<string, unknown>).error ?? response.statusText}`,
+        )
+        codexAppHistoryEntries.value = []
+        selectedHistoryThreadId.value = ''
+        historyNextCursor.value = ''
+        return
+      }
+
+      const payload = (await response.json()) as unknown
+      const parsed = parseCodexAppHistoryResponse(payload)
+      if (!parsed) {
+        pushLog('rpc', 'warn', 'Codex.app history returned unexpected shape', payload as Record<string, unknown>)
+        codexAppHistoryEntries.value = []
+        selectedHistoryThreadId.value = ''
+        historyNextCursor.value = ''
+        return
+      }
+
+      codexAppRoots.value = parsed.roots
+      codexAppHistoryGeneratedAt.value = parsed.generatedAt ?? ''
+      const sortedEntries = sortCodexAppHistoryEntries(parsed.entries)
+      codexAppHistoryEntries.value = sortedEntries
+      historyNextCursor.value = ''
+
+      if (sortedEntries.length === 0) {
+        selectedHistoryThreadId.value = ''
+      } else if (!sortedEntries.some((entry) => entry.id === selectedHistoryThreadId.value)) {
+        selectedHistoryThreadId.value = sortedEntries[0]?.id ?? ''
+      }
+
+      pushLog('rpc', 'info', `codex-app history loaded (${sortedEntries.length} threads)`, {
+        total: sortedEntries.length,
+        showAll: codexAppHistoryShowAll.value,
+        generatedAt: codexAppHistoryGeneratedAt.value || null,
+      })
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error)
+      pushLog('rpc', 'error', `Codex.app history fetch error: ${message}`)
+    } finally {
+      historyLoading.value = false
+    }
+  }
+
+  async function setHistoryDisplayMode(mode: string): Promise<void> {
+    if (!isHistoryDisplayMode(mode)) {
+      return
+    }
+    if (historyDisplayMode.value === mode) {
+      return
+    }
+
+    historyDisplayMode.value = mode
+    historyNextCursor.value = ''
+    await loadThreadHistory()
+  }
+
   async function loadThreadHistory(): Promise<void> {
+    if (isCodexAppHistoryMode.value) {
+      await loadCodexAppHistory()
+      return
+    }
     await loadThreadHistoryPage(false)
   }
 
   async function loadMoreThreadHistory(): Promise<void> {
+    if (isCodexAppHistoryMode.value) {
+      return
+    }
     await loadThreadHistoryPage(true)
   }
 
@@ -2491,7 +2788,7 @@ function parseToolUserInputQuestions(params: Record<string, unknown>): ToolUserI
         total: nextHistory.length,
         workspaceCount: workspaceKeys.size,
         bridgeCwd: bridgeCwd.value.trim() || null,
-        showAll: historyShowAll.value,
+        showAll: nativeHistoryShowAll.value,
         hasNextCursor: historyNextCursor.value.length > 0,
         pageSize: HISTORY_PAGE_SIZE,
         append,
@@ -2505,9 +2802,13 @@ function parseToolUserInputQuestions(params: Record<string, unknown>): ToolUserI
   }
 
   async function toggleHistoryScope(): Promise<void> {
-    historyShowAll.value = !historyShowAll.value
+    if (isCodexAppHistoryMode.value) {
+      codexAppHistoryShowAll.value = !codexAppHistoryShowAll.value
+    } else {
+      nativeHistoryShowAll.value = !nativeHistoryShowAll.value
+    }
     historyNextCursor.value = ''
-    await loadThreadHistoryPage(false)
+    await loadThreadHistory()
   }
 
   async function readThread(threadId?: string): Promise<void> {
@@ -3046,8 +3347,10 @@ function parseToolUserInputQuestions(params: Record<string, unknown>): ToolUserI
     isExecutionModeSaving,
     quickStartInProgress,
     userGuidance,
+    historyDisplayMode,
     historyShowAll,
     historyLoading,
+    codexAppHistoryEntries,
     messages,
     logs,
     toolCalls,
@@ -3091,6 +3394,7 @@ function parseToolUserInputQuestions(params: Record<string, unknown>): ToolUserI
     listDirectories,
     loadThreadHistory,
     loadMoreThreadHistory,
+    setHistoryDisplayMode,
     toggleHistoryScope,
     readThread,
     resumeThread,

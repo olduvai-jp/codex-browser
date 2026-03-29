@@ -1633,6 +1633,173 @@ describe('App.vue ui phase-1 flows', () => {
     wrapper.unmount()
   })
 
+  it('switches to codex-app mode, keeps recency ordering, and resumes via thread/resume', async () => {
+    bridgeMock.setRequestHandler(async (method, params) => {
+      if (method === 'initialize') {
+        return { userAgent: 'mock-codex-agent' }
+      }
+      if (method === 'thread/resume') {
+        const request = params as Record<string, unknown>
+        const threadId = typeof request.threadId === 'string' ? request.threadId : 'unknown'
+        return {
+          thread: {
+            id: threadId,
+            turns: [],
+          },
+        }
+      }
+      if (method === 'thread/list') {
+        const request = params as Record<string, unknown>
+        if (request.cwd === '/workspace/current/project') {
+          return {
+            threads: [
+              {
+                id: 'native-current',
+                title: 'Native current',
+                cwd: '/workspace/current/project',
+                updatedAt: '2026-03-20T09:00:00.000Z',
+              },
+            ],
+          }
+        }
+
+        return {
+          threads: [
+            {
+              id: 'native-other',
+              title: 'Native other',
+              cwd: '/workspace/other/project',
+              updatedAt: '2026-03-21T09:00:00.000Z',
+            },
+          ],
+        }
+      }
+
+      throw new Error(`Unexpected method: ${method}`)
+    })
+
+    const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
+      const url = String(input)
+      const parsedUrl = new URL(url, 'http://localhost')
+      const showAll = parsedUrl.searchParams.get('showAll') === '1'
+      const entries = [
+        {
+          id: 'current-newest',
+          title: 'Current newest',
+          updatedAt: '2026-03-22T09:00:00.000Z',
+          cwd: '/workspace/current/project',
+          workspaceRoot: '/workspace/current',
+          workspaceLabel: 'Current',
+        },
+        {
+          id: 'current-a',
+          title: 'A same-time',
+          updatedAt: '2026-03-21T10:00:00.000Z',
+          cwd: '/workspace/current/project',
+          workspaceRoot: '/workspace/current',
+          workspaceLabel: 'Current',
+        },
+        {
+          id: 'current-z',
+          title: 'Z same-time',
+          updatedAt: '2026-03-21T10:00:00.000Z',
+          cwd: '/workspace/current/project',
+          workspaceRoot: '/workspace/current',
+          workspaceLabel: 'Current',
+        },
+      ]
+      if (showAll) {
+        entries.push({
+          id: 'other-newest',
+          title: 'Other newest',
+          updatedAt: '2026-03-23T09:00:00.000Z',
+          cwd: '/workspace/other/project',
+          workspaceRoot: '/workspace/other',
+          workspaceLabel: 'Other',
+        })
+      }
+
+      return {
+        ok: true,
+        json: async () => ({
+          entries,
+          roots: {
+            activeRoots: ['/workspace/current', '/workspace/other'],
+            savedRoots: ['/workspace/current', '/workspace/other'],
+            labels: {
+              '/workspace/current': 'Current',
+              '/workspace/other': 'Other',
+            },
+          },
+          generatedAt: '2026-03-23T09:30:00.000Z',
+        }),
+      } as Response
+    })
+    vi.stubGlobal('fetch', fetchMock)
+
+    const wrapper = mount(App)
+    const client = await connectAndInitialize(wrapper)
+    client.emitMessage({
+      type: 'bridge/status',
+      payload: {
+        event: 'bridge-started',
+        details: {
+          cwd: '/workspace/current/project',
+        },
+      },
+    })
+    await flushPromises()
+
+    await getByTestId(wrapper, 'history-display-codex-button').trigger('click')
+    await flushPromises()
+
+    expect(getVisibleHistoryThreadLabels(wrapper)).toEqual([
+      'Current newest',
+      'A same-time',
+      'Z same-time',
+    ])
+
+    await getByTestId(wrapper, 'history-scope-toggle-button').trigger('click')
+    await flushPromises()
+
+    expect(getVisibleHistoryThreadLabels(wrapper)[0]).toBe('Other newest')
+
+    const otherThreadItem = wrapper.find('[data-testid="history-thread-item"][data-thread-id="other-newest"]')
+    expect(otherThreadItem.exists()).toBe(true)
+    await otherThreadItem.trigger('click')
+    await flushPromises()
+
+    const resumeCall = bridgeMock
+      .getRequestCalls()
+      .find((call) => call.method === 'thread/resume' && (call.params as Record<string, unknown>).threadId === 'other-newest')
+    expect(resumeCall).toBeDefined()
+
+    await getByTestId(wrapper, 'history-display-native-button').trigger('click')
+    await flushPromises()
+
+    expect(getByTestId(wrapper, 'history-scope-toggle-button').text()).toContain('すべて表示')
+    const nativeThreadListCalls = bridgeMock
+      .getRequestCalls()
+      .filter((call) => call.method === 'thread/list')
+    const nativeThreadListCall = nativeThreadListCalls[nativeThreadListCalls.length - 1]
+    expect(nativeThreadListCall?.params).toEqual({
+      limit: 25,
+      sortKey: 'updated_at',
+      archived: false,
+      sourceKinds: [],
+      cwd: '/workspace/current/project',
+    })
+    expect(getVisibleHistoryThreadLabels(wrapper)).toEqual(['Native current'])
+
+    await getByTestId(wrapper, 'history-display-codex-button').trigger('click')
+    await flushPromises()
+    const lastFetchUrl = String(fetchMock.mock.calls[fetchMock.mock.calls.length - 1]?.[0])
+    expect(lastFetchUrl).toContain('showAll=1')
+
+    vi.unstubAllGlobals()
+    wrapper.unmount()
+  })
+
   it('loads more history with nextCursor and appends the next page', async () => {
     bridgeMock.setRequestHandler(async (method, params) => {
       if (method === 'initialize') {

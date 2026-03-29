@@ -189,6 +189,8 @@ export type ThreadHistoryEntry = {
   turnCount?: number
   cwd?: string
   source?: string
+  workspaceRoot?: string
+  workspaceLabel?: string
 }
 
 export type WorkspaceHistoryGroup = {
@@ -198,6 +200,20 @@ export type WorkspaceHistoryGroup = {
   threadCount: number
   latestUpdatedAt?: string
   isCurrentWorkspace: boolean
+}
+
+export type HistoryDisplayMode = 'native' | 'codex-app'
+
+export type CodexAppProjectRootsSnapshot = {
+  activeRoots: string[]
+  savedRoots: string[]
+  labels: Record<string, string>
+}
+
+export type CodexAppHistoryResponse = {
+  entries: ThreadHistoryEntry[]
+  roots: CodexAppProjectRootsSnapshot
+  generatedAt?: string
 }
 
 export type ModelOption = {

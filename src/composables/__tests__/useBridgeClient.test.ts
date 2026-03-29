@@ -357,6 +357,342 @@ describe('useBridgeClient sendTurn', () => {
 
     wrapper.unmount()
   })
+
+  it('loads codex-app history via HTTP and disables pagination in codex-app mode', async () => {
+    bridgeMock.setRequestHandler(async (method) => {
+      if (method === 'initialize') {
+        return { userAgent: 'mock-codex-agent' }
+      }
+      if (method === 'thread/list') {
+        return { threads: [] }
+      }
+      throw new Error(`Unexpected method: ${method}`)
+    })
+
+    const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
+      const url = String(input)
+      const parsedUrl = new URL(url, 'http://localhost')
+      const showAll = parsedUrl.searchParams.get('showAll') === '1'
+      const entries = showAll
+        ? [
+            {
+              id: 'current-newest',
+              title: 'Current newest',
+              updatedAt: '2026-03-22T10:00:00.000Z',
+              cwd: '/workspace/current/project',
+              workspaceRoot: '/workspace/current',
+              workspaceLabel: 'Current',
+            },
+            {
+              id: 'other-newest',
+              title: 'Other newest',
+              updatedAt: '2026-03-23T10:00:00.000Z',
+              cwd: '/workspace/other/project',
+              workspaceRoot: '/workspace/other',
+              workspaceLabel: 'Other',
+            },
+          ]
+        : [
+            {
+              id: 'current-newest',
+              title: 'Current newest',
+              updatedAt: '2026-03-22T10:00:00.000Z',
+              cwd: '/workspace/current/project',
+              workspaceRoot: '/workspace/current',
+              workspaceLabel: 'Current',
+            },
+          ]
+
+      return {
+        ok: true,
+        json: async () => ({
+          entries,
+          roots: {
+            activeRoots: ['/workspace/current', '/workspace/other'],
+            savedRoots: ['/workspace/current', '/workspace/other'],
+            labels: {
+              '/workspace/current': 'Current',
+              '/workspace/other': 'Other',
+            },
+          },
+          generatedAt: showAll ? '2026-03-23T11:00:00.000Z' : '2026-03-22T11:00:00.000Z',
+        }),
+      } as Response
+    })
+    vi.stubGlobal('fetch', fetchMock)
+
+    const wrapper = mount(HostComponent)
+    const vm = wrapper.vm as unknown as {
+      connect: () => Promise<void>
+      setHistoryDisplayMode: (value: string) => Promise<void>
+      toggleHistoryScope: () => Promise<void>
+      loadMoreThreadHistory: () => Promise<void>
+      historyCanLoadMore: boolean
+      workspaceHistoryGroups: Array<{ workspaceKey: string; threads: Array<{ id: string }> }>
+    }
+
+    await vm.connect()
+    await flushPromises()
+
+    getClientInstance().emitMessage({
+      type: 'bridge/status',
+      payload: {
+        event: 'bridge-started',
+        details: {
+          cwd: '/workspace/current/project',
+        },
+      },
+    })
+    await flushPromises()
+
+    await vm.setHistoryDisplayMode('codex-app')
+    await flushPromises()
+
+    expect(fetchMock).toHaveBeenCalledTimes(1)
+    expect(String(fetchMock.mock.calls[0]?.[0])).toContain('/api/codex-app/history')
+    expect(String(fetchMock.mock.calls[0]?.[0])).toContain('showAll=0')
+    expect(vm.workspaceHistoryGroups.map((group) => group.workspaceKey)).toEqual(['/workspace/current'])
+    expect(vm.workspaceHistoryGroups[0]?.threads.map((entry) => entry.id)).toEqual(['current-newest'])
+    expect(vm.historyCanLoadMore).toBe(false)
+
+    await vm.loadMoreThreadHistory()
+    await flushPromises()
+    expect(fetchMock).toHaveBeenCalledTimes(1)
+
+    await vm.toggleHistoryScope()
+    await flushPromises()
+
+    expect(fetchMock).toHaveBeenCalledTimes(2)
+    expect(String(fetchMock.mock.calls[1]?.[0])).toContain('showAll=1')
+    expect(vm.workspaceHistoryGroups.map((group) => group.workspaceKey)).toEqual([
+      '/workspace/other',
+      '/workspace/current',
+    ])
+
+    vi.unstubAllGlobals()
+    wrapper.unmount()
+  })
+
+  it('keeps history scope independent between native and codex-app modes', async () => {
+    bridgeMock.setRequestHandler(async (method, params) => {
+      if (method === 'initialize') {
+        return { userAgent: 'mock-codex-agent' }
+      }
+      if (method === 'thread/list') {
+        const request = params as Record<string, unknown>
+        if (typeof request.cwd === 'string') {
+          return {
+            threads: [
+              {
+                id: 'native-current',
+                title: 'Native current',
+                cwd: '/workspace/current/project',
+                updatedAt: '2026-03-22T11:00:00.000Z',
+              },
+            ],
+          }
+        }
+        return {
+          threads: [
+            {
+              id: 'native-all',
+              title: 'Native all',
+              cwd: '/workspace/other/project',
+              updatedAt: '2026-03-23T11:00:00.000Z',
+            },
+          ],
+        }
+      }
+      throw new Error(`Unexpected method: ${method}`)
+    })
+
+    const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
+      const url = String(input)
+      const parsedUrl = new URL(url, 'http://localhost')
+      const showAll = parsedUrl.searchParams.get('showAll') === '1'
+      const entries = showAll
+        ? [
+            {
+              id: 'codex-other',
+              title: 'Codex other',
+              updatedAt: '2026-03-23T10:00:00.000Z',
+              cwd: '/workspace/other/project',
+              workspaceRoot: '/workspace/other',
+              workspaceLabel: 'Other',
+            },
+            {
+              id: 'codex-current',
+              title: 'Codex current',
+              updatedAt: '2026-03-22T10:00:00.000Z',
+              cwd: '/workspace/current/project',
+              workspaceRoot: '/workspace/current',
+              workspaceLabel: 'Current',
+            },
+          ]
+        : [
+            {
+              id: 'codex-current',
+              title: 'Codex current',
+              updatedAt: '2026-03-22T10:00:00.000Z',
+              cwd: '/workspace/current/project',
+              workspaceRoot: '/workspace/current',
+              workspaceLabel: 'Current',
+            },
+          ]
+
+      return {
+        ok: true,
+        json: async () => ({
+          entries,
+          roots: {
+            activeRoots: ['/workspace/current', '/workspace/other'],
+            savedRoots: [],
+            labels: {
+              '/workspace/current': 'Current',
+              '/workspace/other': 'Other',
+            },
+          },
+          generatedAt: '2026-03-23T12:00:00.000Z',
+        }),
+      } as Response
+    })
+    vi.stubGlobal('fetch', fetchMock)
+
+    const wrapper = mount(HostComponent)
+    const vm = wrapper.vm as unknown as {
+      connect: () => Promise<void>
+      loadThreadHistory: () => Promise<void>
+      setHistoryDisplayMode: (value: string) => Promise<void>
+      toggleHistoryScope: () => Promise<void>
+      historyShowAll: boolean
+    }
+
+    await vm.connect()
+    await flushPromises()
+
+    getClientInstance().emitMessage({
+      type: 'bridge/status',
+      payload: {
+        event: 'bridge-started',
+        details: {
+          cwd: '/workspace/current/project',
+        },
+      },
+    })
+    await flushPromises()
+
+    await vm.loadThreadHistory()
+    await flushPromises()
+    expect(vm.historyShowAll).toBe(false)
+
+    await vm.setHistoryDisplayMode('codex-app')
+    await flushPromises()
+    expect(vm.historyShowAll).toBe(false)
+
+    await vm.toggleHistoryScope()
+    await flushPromises()
+    expect(vm.historyShowAll).toBe(true)
+
+    await vm.setHistoryDisplayMode('native')
+    await flushPromises()
+    expect(vm.historyShowAll).toBe(false)
+
+    await vm.setHistoryDisplayMode('codex-app')
+    await flushPromises()
+    expect(vm.historyShowAll).toBe(true)
+    expect(String(fetchMock.mock.calls[2]?.[0])).toContain('showAll=1')
+
+    vi.unstubAllGlobals()
+    wrapper.unmount()
+  })
+
+  it('keeps native current workspace strict while codex-app mode allows root-prefix matching', async () => {
+    bridgeMock.setRequestHandler(async (method, params) => {
+      if (method === 'initialize') {
+        return { userAgent: 'mock-codex-agent' }
+      }
+      if (method === 'thread/list') {
+        const request = params as Record<string, unknown>
+        expect(request.cwd).toBe('/workspace/current/project')
+        return {
+          threads: [
+            {
+              id: 'native-parent-root',
+              title: 'Native parent root',
+              cwd: '/workspace/current',
+              updatedAt: '2026-03-22T10:00:00.000Z',
+            },
+          ],
+        }
+      }
+      throw new Error(`Unexpected method: ${method}`)
+    })
+
+    const fetchMock = vi.fn(async () => {
+      return {
+        ok: true,
+        json: async () => ({
+          entries: [
+            {
+              id: 'codex-parent-root',
+              title: 'Codex parent root',
+              updatedAt: '2026-03-22T12:00:00.000Z',
+              cwd: '/workspace/current/project',
+              workspaceRoot: '/workspace/current',
+              workspaceLabel: 'Current',
+            },
+          ],
+          roots: {
+            activeRoots: ['/workspace/current'],
+            savedRoots: [],
+            labels: {
+              '/workspace/current': 'Current',
+            },
+          },
+          generatedAt: '2026-03-23T13:00:00.000Z',
+        }),
+      } as Response
+    })
+    vi.stubGlobal('fetch', fetchMock)
+
+    const wrapper = mount(HostComponent)
+    const vm = wrapper.vm as unknown as {
+      connect: () => Promise<void>
+      loadThreadHistory: () => Promise<void>
+      setHistoryDisplayMode: (value: string) => Promise<void>
+      workspaceHistoryGroups: Array<{ workspaceKey: string; isCurrentWorkspace: boolean }>
+    }
+
+    await vm.connect()
+    await flushPromises()
+
+    getClientInstance().emitMessage({
+      type: 'bridge/status',
+      payload: {
+        event: 'bridge-started',
+        details: {
+          cwd: '/workspace/current/project',
+        },
+      },
+    })
+    await flushPromises()
+
+    await vm.loadThreadHistory()
+    await flushPromises()
+
+    expect(vm.workspaceHistoryGroups.find((group) => group.workspaceKey === '/workspace/current')?.isCurrentWorkspace)
+      .toBe(false)
+    expect(vm.workspaceHistoryGroups.find((group) => group.workspaceKey === '/workspace/current/project')?.isCurrentWorkspace)
+      .toBe(true)
+
+    await vm.setHistoryDisplayMode('codex-app')
+    await flushPromises()
+    expect(vm.workspaceHistoryGroups.find((group) => group.workspaceKey === '/workspace/current')?.isCurrentWorkspace)
+      .toBe(true)
+
+    vi.unstubAllGlobals()
+    wrapper.unmount()
+  })
 })
 
 describe('useBridgeClient quickStartConversation', () => {

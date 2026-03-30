@@ -5,11 +5,13 @@ defineProps<{
   sidebarOpen: boolean
   userGuidance: UserGuidance | null
   modelLabel: string
+  showLogout?: boolean
 }>()
 
 const emit = defineEmits<{
   'toggle-sidebar': []
   'new-thread': []
+  logout: []
 }>()
 </script>
 
@@ -42,6 +44,15 @@ const emit = defineEmits<{
       </svg>
     </button>
     <span class="flex-1" />
+    <button
+      v-if="showLogout"
+      type="button"
+      class="rounded-lg px-2.5 py-1.5 text-xs text-text-muted transition-colors hover:bg-surface-secondary hover:text-text-primary focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus-ring/40"
+      data-testid="logout-button"
+      @click="emit('logout')"
+    >
+      ログアウト
+    </button>
     <span v-if="modelLabel" class="text-sm text-text-muted">{{ modelLabel }}</span>
   </header>
 

@@ -76,6 +76,8 @@ const FULL_AUTO_APPROVAL_POLICY: ApprovalPolicy = 'on-request'
 const FULL_AUTO_SANDBOX_MODE: SandboxMode = 'workspace-write'
 const DANGEROUS_APPROVAL_POLICY: ApprovalPolicy = 'never'
 const DANGEROUS_SANDBOX_MODE: SandboxMode = 'danger-full-access'
+const QUICK_START_CONNECT_POLL_INTERVAL_MS = 25
+const QUICK_START_CONNECT_WAIT_TIMEOUT_MS = 5_000
 
 type ToolItemType = 'commandExecution' | 'fileChange' | 'mcpToolCall'
 type ToolUserInputAnswers = Record<string, { answers: string[] }>
@@ -925,7 +927,7 @@ export function useBridgeClient() {
       !isTurnActive.value,
   )
   const canQuickStartConversation = computed(
-    () => connectionState.value !== 'connecting' && !quickStartInProgress.value && !isTurnActive.value,
+    () => !quickStartInProgress.value && !isTurnActive.value,
   )
   const isCodexAppHistoryMode = computed(() => historyDisplayMode.value === 'codex-app')
   const visibleHistoryEntries = computed<ThreadHistoryEntry[]>(() =>
@@ -2602,6 +2604,25 @@ function parseToolUserInputQuestions(params: Record<string, unknown>): ToolUserI
     }
   }
 
+  async function waitForQuickStartConnectionReady(
+    timeoutMs = QUICK_START_CONNECT_WAIT_TIMEOUT_MS,
+  ): Promise<void> {
+    if (connectionState.value !== 'connecting') {
+      return
+    }
+
+    const startedAt = Date.now()
+    while (connectionState.value === 'connecting') {
+      if (Date.now() - startedAt >= timeoutMs) {
+        return
+      }
+
+      await new Promise<void>((resolve) => {
+        setTimeout(resolve, QUICK_START_CONNECT_POLL_INTERVAL_MS)
+      })
+    }
+  }
+
   async function quickStartConversation(): Promise<void> {
     if (!canQuickStartConversation.value) {
       return
@@ -2610,9 +2631,13 @@ function parseToolUserInputQuestions(params: Record<string, unknown>): ToolUserI
     quickStartInProgress.value = true
 
     try {
+      await waitForQuickStartConnectionReady()
+
       if (!client.value || !isConnected.value || !initialized.value) {
         await connect()
       }
+
+      await waitForQuickStartConnectionReady()
 
       if (!client.value || !isConnected.value || !initialized.value) {
         pushLog('rpc', 'warn', 'Quick start cancelled: connection is not ready.')

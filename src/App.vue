@@ -9,6 +9,7 @@ import AdvancedPanel from './components/advanced/AdvancedPanel.vue'
 import ApprovalModal from './components/approval/ApprovalModal.vue'
 import ToolUserInputModal from './components/tool/ToolUserInputModal.vue'
 import WorkspacePicker from './components/workspace/WorkspacePicker.vue'
+import { logoutBrowserAuth, readBrowserAuthSession } from './lib/browserAuth'
 
 const {
   resolvedWsUrl,
@@ -84,6 +85,7 @@ const {
 const sidebarOpen = ref(true)
 const advancedPanelOpen = ref(false)
 const workspacePickerOpen = ref(false)
+const authEnabled = ref(false)
 
 const currentModelLabel = computed(() => {
   if (!selectedModelId.value) return ''
@@ -96,8 +98,27 @@ function handleWorkspaceSelect(cwd: string): void {
   workspacePickerOpen.value = false
 }
 
+async function handleConnect(): Promise<void> {
+  await connect()
+  if (!isConnected.value || !initialized.value) {
+    return
+  }
+  await quickStartConversation()
+}
+
+async function handleLogout(): Promise<void> {
+  await logoutBrowserAuth()
+  disconnect()
+  window.dispatchEvent(new CustomEvent('codex-browser-auth-logout'))
+}
+
 onMounted(() => {
-  quickStartConversation()
+  void quickStartConversation()
+
+  void (async () => {
+    const session = await readBrowserAuthSession()
+    authEnabled.value = session.authEnabled && session.authenticated
+  })()
 })
 </script>
 
@@ -131,7 +152,7 @@ onMounted(() => {
           @open-workspace-picker="workspacePickerOpen = true"
           @toggle-advanced-panel="advancedPanelOpen = !advancedPanelOpen"
           @toggle-sidebar="sidebarOpen = false"
-          @connect="connect"
+          @connect="handleConnect"
           @disconnect="disconnect()"
         />
       </div>
@@ -153,8 +174,10 @@ onMounted(() => {
         :sidebar-open="sidebarOpen"
         :user-guidance="userGuidance"
         :model-label="currentModelLabel"
+        :show-logout="authEnabled"
         @toggle-sidebar="sidebarOpen = !sidebarOpen"
         @new-thread="startThread()"
+        @logout="handleLogout"
       />
 
       <MessageList

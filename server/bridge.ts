@@ -1,8 +1,9 @@
-import { createServer, type IncomingMessage } from 'node:http'
+import { createServer, type IncomingMessage, type ServerResponse } from 'node:http'
 import { spawn, type ChildProcessWithoutNullStreams } from 'node:child_process'
 import { createInterface } from 'node:readline'
 
 import { WebSocketServer, WebSocket, type RawData } from 'ws'
+import { config as loadEnv } from 'dotenv'
 
 import {
   createBridgeLog,
@@ -22,11 +23,17 @@ import {
 } from './initialize-request-cache'
 import { listDirectoryChildren } from './directory-listing'
 import { listCodexAppHistory, upsertCodexAppHistoryEntry } from './codex-app-history'
+import { BrowserAuthService, resolveBrowserAuthConfig } from './browser-auth'
+
+loadEnv()
 
 const BRIDGE_HOST = process.env.BRIDGE_HOST ?? '127.0.0.1'
 const BRIDGE_PORT = Number.parseInt(process.env.BRIDGE_PORT ?? '8787', 10)
 const BRIDGE_PATH = process.env.BRIDGE_PATH ?? '/bridge'
 const BRIDGE_CWD = process.cwd()
+const BRIDGE_DISABLE_CODEX_SPAWN = process.env.BRIDGE_DISABLE_CODEX_SPAWN === '1'
+const browserAuthConfig = resolveBrowserAuthConfig(process.env)
+const browserAuth = new BrowserAuthService(browserAuthConfig)
 
 if (!Number.isFinite(BRIDGE_PORT) || BRIDGE_PORT <= 0) {
   throw new Error(`Invalid BRIDGE_PORT: ${process.env.BRIDGE_PORT ?? '(unset)'}`)
@@ -71,6 +78,53 @@ function parseCodexAppHistoryUpsertBody(payload: unknown): CodexAppHistoryUpsert
   }
 }
 
+type LoginRequestBody = {
+  username: string
+  password: string
+}
+
+function parseLoginRequestBody(payload: unknown): LoginRequestBody | null {
+  if (!isRecord(payload)) {
+    return null
+  }
+
+  const username = parseOptionalTrimmedString(payload.username)
+  const password = parseOptionalTrimmedString(payload.password)
+  if (!username || !password) {
+    return null
+  }
+
+  return {
+    username,
+    password,
+  }
+}
+
+function extractRequestPath(req: IncomingMessage): string {
+  try {
+    return new URL(req.url ?? '/', `http://${req.headers.host ?? `${BRIDGE_HOST}:${BRIDGE_PORT}`}`).pathname
+  } catch {
+    return (req.url ?? '/').split('?')[0] || '/'
+  }
+}
+
+function respondJson(
+  res: ServerResponse,
+  statusCode: number,
+  payload: unknown,
+  headers: Record<string, string> = {},
+): void {
+  const mergedHeaders = {
+    'content-type': 'application/json',
+    ...headers,
+  }
+  if (browserAuthConfig.enabled && statusCode === 401 && !mergedHeaders['www-authenticate']) {
+    mergedHeaders['www-authenticate'] = 'Session'
+  }
+  res.writeHead(statusCode, mergedHeaders)
+  res.end(JSON.stringify(payload))
+}
+
 async function readJsonRequestBody(req: IncomingMessage): Promise<unknown> {
   const chunks: Buffer[] = []
   await new Promise<void>((resolve, reject) => {
@@ -94,31 +148,90 @@ async function readJsonRequestBody(req: IncomingMessage): Promise<unknown> {
 }
 
 const httpServer = createServer((req, res) => {
-  if (req.url === '/health') {
-    res.writeHead(200, { 'content-type': 'application/json' })
-    res.end(JSON.stringify({ ok: true }))
+  const requestPath = extractRequestPath(req)
+
+  if (requestPath === '/health') {
+    respondJson(res, 200, { ok: true })
     return
   }
 
-  if (req.method === 'GET' && req.url?.startsWith('/api/directories')) {
-    const url = new URL(req.url, `http://${BRIDGE_HOST}:${BRIDGE_PORT}`)
+  if (req.method === 'GET' && requestPath === '/api/auth/session') {
+    const session = browserAuth.getSessionStateFromRequest(req)
+    respondJson(res, 200, {
+      authEnabled: browserAuthConfig.enabled,
+      authenticated: browserAuthConfig.enabled ? session.authenticated : true,
+      ...(session.username ? { username: session.username } : {}),
+    })
+    return
+  }
+
+  if (req.method === 'POST' && requestPath === '/api/auth/login') {
+    if (!browserAuthConfig.enabled) {
+      respondJson(res, 400, { error: 'Browser auth is disabled' })
+      return
+    }
+
+    readJsonRequestBody(req)
+      .then((payload) => {
+        const body = parseLoginRequestBody(payload)
+        if (!body) {
+          respondJson(res, 400, { error: 'Invalid request body' })
+          return
+        }
+        if (!browserAuth.authenticateCredentials(body.username, body.password)) {
+          respondJson(res, 401, { error: 'Invalid username or password' })
+          return
+        }
+
+        const sessionId = browserAuth.createSession(body.username)
+        const sessionCookie = browserAuth.createSessionCookieHeader(req, sessionId)
+        respondJson(res, 200, { ok: true }, { 'set-cookie': sessionCookie })
+      })
+      .catch((error) => {
+        const message = error instanceof Error ? error.message : String(error)
+        respondJson(res, 400, { error: message })
+      })
+    return
+  }
+
+  if (req.method === 'POST' && requestPath === '/api/auth/logout') {
+    if (browserAuthConfig.enabled) {
+      browserAuth.clearSessionFromCookieHeader(req.headers.cookie)
+      const clearCookie = browserAuth.createClearSessionCookieHeader(req)
+      respondJson(res, 200, { ok: true }, { 'set-cookie': clearCookie })
+      return
+    }
+
+    respondJson(res, 200, { ok: true })
+    return
+  }
+
+  const isApiRequest = requestPath.startsWith('/api/')
+  if (browserAuthConfig.enabled && isApiRequest && !requestPath.startsWith('/api/auth/')) {
+      const session = browserAuth.getSessionStateFromRequest(req)
+      if (!session.authenticated) {
+      respondJson(res, 401, { error: 'Authentication required' })
+      return
+    }
+  }
+
+  if (req.method === 'GET' && requestPath === '/api/directories') {
+    const url = new URL(req.url ?? requestPath, `http://${BRIDGE_HOST}:${BRIDGE_PORT}`)
     const requestedPath = url.searchParams.get('path') ?? BRIDGE_CWD
 
     listDirectoryChildren(requestedPath)
       .then((result) => {
-        res.writeHead(200, { 'content-type': 'application/json' })
-        res.end(JSON.stringify(result))
+        respondJson(res, 200, result)
       })
       .catch((error) => {
         const message = error instanceof Error ? error.message : String(error)
-        res.writeHead(400, { 'content-type': 'application/json' })
-        res.end(JSON.stringify({ error: message }))
+        respondJson(res, 400, { error: message })
       })
     return
   }
 
-  if (req.method === 'GET' && req.url?.startsWith('/api/codex-app/history')) {
-    const url = new URL(req.url, `http://${BRIDGE_HOST}:${BRIDGE_PORT}`)
+  if (req.method === 'GET' && requestPath === '/api/codex-app/history') {
+    const url = new URL(req.url ?? requestPath, `http://${BRIDGE_HOST}:${BRIDGE_PORT}`)
     const showAll = url.searchParams.get('showAll') === '1'
     const cwd = url.searchParams.get('cwd') ?? undefined
 
@@ -127,42 +240,36 @@ const httpServer = createServer((req, res) => {
       cwd,
     })
       .then((result) => {
-        res.writeHead(200, { 'content-type': 'application/json' })
-        res.end(JSON.stringify(result))
+        respondJson(res, 200, result)
       })
       .catch((error) => {
         const message = error instanceof Error ? error.message : String(error)
-        res.writeHead(500, { 'content-type': 'application/json' })
-        res.end(JSON.stringify({ error: message }))
+        respondJson(res, 500, { error: message })
       })
     return
   }
 
-  if (req.method === 'POST' && req.url?.startsWith('/api/codex-app/history/upsert')) {
+  if (req.method === 'POST' && requestPath === '/api/codex-app/history/upsert') {
     readJsonRequestBody(req)
       .then((payload) => {
         const body = parseCodexAppHistoryUpsertBody(payload)
         if (!body) {
-          res.writeHead(400, { 'content-type': 'application/json' })
-          res.end(JSON.stringify({ error: 'Invalid request body' }))
+          respondJson(res, 400, { error: 'Invalid request body' })
           return
         }
 
         upsertCodexAppHistoryEntry(body)
           .then(() => {
-            res.writeHead(200, { 'content-type': 'application/json' })
-            res.end(JSON.stringify({ ok: true }))
+            respondJson(res, 200, { ok: true })
           })
           .catch((error) => {
             const message = error instanceof Error ? error.message : String(error)
-            res.writeHead(500, { 'content-type': 'application/json' })
-            res.end(JSON.stringify({ error: message }))
+            respondJson(res, 500, { error: message })
           })
       })
       .catch((error) => {
         const message = error instanceof Error ? error.message : String(error)
-        res.writeHead(400, { 'content-type': 'application/json' })
-        res.end(JSON.stringify({ error: message }))
+        respondJson(res, 400, { error: message })
       })
     return
   }
@@ -174,6 +281,20 @@ const httpServer = createServer((req, res) => {
 const wsServer = new WebSocketServer({
   server: httpServer,
   path: BRIDGE_PATH,
+  verifyClient: (info, done) => {
+    if (!browserAuthConfig.enabled) {
+      done(true)
+      return
+    }
+
+    const session = browserAuth.getSessionStateFromCookieHeader(info.req.headers.cookie)
+    if (!session.authenticated) {
+      done(false, 401, 'Unauthorized')
+      return
+    }
+
+    done(true)
+  },
 })
 
 const CODEX_RESTART_MAX_ATTEMPTS = 5
@@ -571,12 +692,24 @@ httpServer.on('error', (error) => {
 })
 
 httpServer.listen(BRIDGE_PORT, BRIDGE_HOST, () => {
-  startCodexProcess()
+  if (BRIDGE_DISABLE_CODEX_SPAWN) {
+    broadcastStatus('codex-unavailable', {
+      reason: 'disabled-by-env',
+      envVar: 'BRIDGE_DISABLE_CODEX_SPAWN',
+    })
+    broadcastLog('bridge', 'warn', 'Codex process spawn disabled via BRIDGE_DISABLE_CODEX_SPAWN=1')
+  } else {
+    startCodexProcess()
+  }
   broadcastStatus('bridge-started', {
     host: BRIDGE_HOST,
     port: BRIDGE_PORT,
     path: BRIDGE_PATH,
     cwd: BRIDGE_CWD,
+    browserAuthEnabled: browserAuthConfig.enabled,
   })
+  if (browserAuthConfig.enabled) {
+    broadcastLog('bridge', 'info', 'Browser auth is enabled')
+  }
   console.log(`Bridge listening on ws://${BRIDGE_HOST}:${BRIDGE_PORT}${BRIDGE_PATH}`)
 })

@@ -1329,4 +1329,111 @@ describe('useBridgeClient quickStartConversation', () => {
 
     wrapper.unmount()
   })
+
+  it('waits for an in-flight connect and still completes quick start', async () => {
+    vi.useFakeTimers()
+
+    try {
+      bridgeMock.setRequestHandler(async (method, params) => {
+        if (method === 'initialize') {
+          await new Promise<void>((resolve) => {
+            setTimeout(resolve, 120)
+          })
+          queueMicrotask(() => {
+            getClientInstance().emitMessage({
+              type: 'bridge/status',
+              payload: {
+                event: 'bridge-started',
+                details: {
+                  cwd: '/workspace/race',
+                },
+              },
+            })
+          })
+          return { userAgent: 'mock-codex-race-agent' }
+        }
+
+        if (method === 'model/list') {
+          return { models: [] }
+        }
+
+        if (method === 'thread/list') {
+          expect(params).toEqual({
+            limit: 25,
+            sortKey: 'updated_at',
+            archived: false,
+            sourceKinds: [],
+          })
+          return { threads: [] }
+        }
+
+        if (method === 'thread/start') {
+          expect(params).toEqual({
+            experimentalRawEvents: false,
+            cwd: '/workspace/race',
+          })
+          return {
+            thread: {
+              id: 'thread-race-quick-start',
+            },
+          }
+        }
+
+        if (method === 'config/read') {
+          return {
+            version: 'config-race-quick-start-1',
+            result: {
+              values: {},
+            },
+          }
+        }
+
+        if (method === 'configRequirements/read') {
+          return {
+            requirements: {
+              allowedApprovalPolicies: ['on-request'],
+              allowedSandboxModes: ['workspace-write'],
+            },
+          }
+        }
+
+        throw new Error(`Unexpected method: ${method}`)
+      })
+
+      const wrapper = mount(HostComponent)
+      const vm = wrapper.vm as unknown as {
+        connect: () => Promise<void>
+        quickStartConversation: () => Promise<void>
+        activeThreadId: string
+      }
+
+      const connectPromise = vm.connect()
+      await flushPromises()
+
+      const quickStartPromise = vm.quickStartConversation()
+      await vi.advanceTimersByTimeAsync(150)
+      await flushPromises()
+      await connectPromise
+      await quickStartPromise
+      await flushPromises()
+
+      expect(
+        bridgeMock.getRequestCalls().find((call) => call.method === 'thread/start')?.params,
+      ).toEqual({
+        experimentalRawEvents: false,
+        cwd: '/workspace/race',
+      })
+      expect(
+        bridgeMock.getRequestCalls().find((call) => call.method === 'config/read')?.params,
+      ).toEqual({
+        includeLayers: true,
+        cwd: '/workspace/race',
+      })
+      expect(vm.activeThreadId).toBe('thread-race-quick-start')
+
+      wrapper.unmount()
+    } finally {
+      vi.useRealTimers()
+    }
+  })
 })

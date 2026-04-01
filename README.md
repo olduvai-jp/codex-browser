@@ -1,4 +1,4 @@
-# vue-codex-client
+# @olduvai-jp/codex-browser
 
 A browser-based chat client for [Codex](https://github.com/openai/codex) AI, built with Vue 3 and connected via a WebSocket bridge server.
 
@@ -28,6 +28,35 @@ Browser (Vue SPA)  <──WebSocket──>  Bridge Server (Node.js)  <──stdi
 
 - `src/` — Frontend application (components, composables, router)
 - `server/` — WebSocket bridge server that spawns and communicates with the Codex process
+
+## Run with npx (published package)
+
+Node.js `^20.19.0 || >=22.12.0` is required.
+
+```sh
+npx @olduvai-jp/codex-browser
+```
+
+By default, the CLI prints a local URL and keeps running.
+It does **not** open a browser unless you pass `--open`.
+
+```sh
+npx @olduvai-jp/codex-browser --open
+npx @olduvai-jp/codex-browser --host 0.0.0.0 --port 9000
+```
+
+Available options:
+
+- `--host <host>`: bind host (default `127.0.0.1`)
+- `--port <port>`: fixed port (fails if already in use)
+- `--open`: open browser after launch
+- `--help`: show CLI help
+
+Optional browser auth env vars:
+
+```sh
+CODEX_BROWSER_AUTH_USERNAME=alice CODEX_BROWSER_AUTH_PASSWORD=secret npx @olduvai-jp/codex-browser
+```
 
 ## Project Setup
 

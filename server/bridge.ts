@@ -1,5 +1,7 @@
 import { createServer, type IncomingMessage, type ServerResponse } from 'node:http'
 import { spawn, type ChildProcessWithoutNullStreams } from 'node:child_process'
+import { readFile, stat } from 'node:fs/promises'
+import { extname, resolve, sep } from 'node:path'
 import { createInterface } from 'node:readline'
 
 import { WebSocketServer, WebSocket, type RawData } from 'ws'
@@ -30,6 +32,8 @@ loadEnv()
 const BRIDGE_HOST = process.env.BRIDGE_HOST ?? '127.0.0.1'
 const BRIDGE_PORT = Number.parseInt(process.env.BRIDGE_PORT ?? '8787', 10)
 const BRIDGE_PATH = process.env.BRIDGE_PATH ?? '/bridge'
+const BRIDGE_STATIC_ROOT = parseOptionalTrimmedString(process.env.BRIDGE_STATIC_ROOT)
+const BRIDGE_STATIC_ROOT_RESOLVED = BRIDGE_STATIC_ROOT ? resolve(BRIDGE_STATIC_ROOT) : null
 const BRIDGE_CWD = process.cwd()
 const BRIDGE_DISABLE_CODEX_SPAWN = process.env.BRIDGE_DISABLE_CODEX_SPAWN === '1'
 const browserAuthConfig = resolveBrowserAuthConfig(process.env)
@@ -123,6 +127,139 @@ function respondJson(
   }
   res.writeHead(statusCode, mergedHeaders)
   res.end(JSON.stringify(payload))
+}
+
+function respondBridgeInfo(res: ServerResponse): void {
+  res.writeHead(200, { 'content-type': 'text/plain; charset=utf-8' })
+  res.end(`Codex bridge is running. Connect via ws://${BRIDGE_HOST}:${BRIDGE_PORT}${BRIDGE_PATH}\n`)
+}
+
+const CONTENT_TYPE_BY_EXTENSION = new Map<string, string>([
+  ['.css', 'text/css; charset=utf-8'],
+  ['.html', 'text/html; charset=utf-8'],
+  ['.ico', 'image/x-icon'],
+  ['.jpg', 'image/jpeg'],
+  ['.jpeg', 'image/jpeg'],
+  ['.js', 'text/javascript; charset=utf-8'],
+  ['.json', 'application/json; charset=utf-8'],
+  ['.mjs', 'text/javascript; charset=utf-8'],
+  ['.png', 'image/png'],
+  ['.svg', 'image/svg+xml'],
+  ['.txt', 'text/plain; charset=utf-8'],
+  ['.webp', 'image/webp'],
+  ['.woff', 'font/woff'],
+  ['.woff2', 'font/woff2'],
+])
+
+function resolveContentType(pathname: string): string {
+  return CONTENT_TYPE_BY_EXTENSION.get(extname(pathname).toLowerCase()) ?? 'application/octet-stream'
+}
+
+function resolveStaticCandidatePath(requestPath: string): string | null {
+  if (!BRIDGE_STATIC_ROOT_RESOLVED) {
+    return null
+  }
+
+  let decodedPath = ''
+  try {
+    decodedPath = decodeURIComponent(requestPath)
+  } catch {
+    return null
+  }
+
+  const relativePath = decodedPath.replace(/^\/+/, '')
+  const candidatePath = resolve(BRIDGE_STATIC_ROOT_RESOLVED, relativePath)
+  const allowedPrefix = BRIDGE_STATIC_ROOT_RESOLVED.endsWith(sep)
+    ? BRIDGE_STATIC_ROOT_RESOLVED
+    : `${BRIDGE_STATIC_ROOT_RESOLVED}${sep}`
+  if (candidatePath === BRIDGE_STATIC_ROOT_RESOLVED || candidatePath.startsWith(allowedPrefix)) {
+    return candidatePath
+  }
+
+  return null
+}
+
+async function isRegularFile(pathname: string): Promise<boolean> {
+  try {
+    const fileStat = await stat(pathname)
+    return fileStat.isFile()
+  } catch {
+    return false
+  }
+}
+
+async function respondWithStaticFile(
+  req: IncomingMessage,
+  res: ServerResponse,
+  pathname: string,
+): Promise<void> {
+  const body = await readFile(pathname)
+  res.writeHead(200, {
+    'content-type': resolveContentType(pathname),
+    'content-length': String(body.byteLength),
+  })
+  if (req.method === 'HEAD') {
+    res.end()
+    return
+  }
+  res.end(body)
+}
+
+async function tryServeStaticRequest(
+  req: IncomingMessage,
+  res: ServerResponse,
+  requestPath: string,
+): Promise<boolean> {
+  if (!BRIDGE_STATIC_ROOT_RESOLVED) {
+    return false
+  }
+  if (requestPath === BRIDGE_PATH) {
+    return false
+  }
+  if (req.method !== 'GET' && req.method !== 'HEAD') {
+    return false
+  }
+
+  const indexPath = resolve(BRIDGE_STATIC_ROOT_RESOLVED, 'index.html')
+  if (requestPath === '/') {
+    if (!(await isRegularFile(indexPath))) {
+      res.writeHead(500, { 'content-type': 'text/plain; charset=utf-8' })
+      res.end('Static index.html is missing.\n')
+      return true
+    }
+    await respondWithStaticFile(req, res, indexPath)
+    return true
+  }
+
+  const candidatePath = resolveStaticCandidatePath(requestPath)
+  if (!candidatePath) {
+    res.writeHead(400, { 'content-type': 'text/plain; charset=utf-8' })
+    res.end('Invalid path.\n')
+    return true
+  }
+
+  if (await isRegularFile(candidatePath)) {
+    await respondWithStaticFile(req, res, candidatePath)
+    return true
+  }
+
+  if (extname(candidatePath).length > 0) {
+    res.writeHead(404, { 'content-type': 'text/plain; charset=utf-8' })
+    if (req.method === 'HEAD') {
+      res.end()
+      return true
+    }
+    res.end('Not found.\n')
+    return true
+  }
+
+  if (!(await isRegularFile(indexPath))) {
+    res.writeHead(500, { 'content-type': 'text/plain; charset=utf-8' })
+    res.end('Static index.html is missing.\n')
+    return true
+  }
+  await respondWithStaticFile(req, res, indexPath)
+  return true
 }
 
 async function readJsonRequestBody(req: IncomingMessage): Promise<unknown> {
@@ -274,8 +411,23 @@ const httpServer = createServer((req, res) => {
     return
   }
 
-  res.writeHead(200, { 'content-type': 'text/plain; charset=utf-8' })
-  res.end(`Codex bridge is running. Connect via ws://${BRIDGE_HOST}:${BRIDGE_PORT}${BRIDGE_PATH}\n`)
+  if (BRIDGE_STATIC_ROOT_RESOLVED) {
+    tryServeStaticRequest(req, res, requestPath)
+      .then((served) => {
+        if (served) {
+          return
+        }
+        respondBridgeInfo(res)
+      })
+      .catch((error) => {
+        const message = error instanceof Error ? error.message : String(error)
+        res.writeHead(500, { 'content-type': 'text/plain; charset=utf-8' })
+        res.end(`Failed to serve static content: ${message}\n`)
+      })
+    return
+  }
+
+  respondBridgeInfo(res)
 })
 
 const wsServer = new WebSocketServer({

@@ -13,7 +13,7 @@
     "README.md"
   ],
   "scripts": {
-    "dev": "tsx scripts/dev-auto-port.ts",
+    "dev": "cross-env CODEX_BROWSER_DEV=1 node bin/codex-browser.js",
     "dev:frontend": "vite",
     "dev:backend": "tsx server/bridge.ts",
     "dev:all": "run-p dev:frontend dev:backend",

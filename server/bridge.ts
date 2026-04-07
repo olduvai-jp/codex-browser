@@ -1,6 +1,7 @@
-import { createServer, type IncomingMessage, type ServerResponse } from 'node:http'
+import { createServer, request as httpRequest, type IncomingMessage, type ServerResponse } from 'node:http'
 import { spawn, type ChildProcessWithoutNullStreams } from 'node:child_process'
 import { readFile, stat } from 'node:fs/promises'
+import { request as httpsRequest } from 'node:https'
 import { extname, resolve, sep } from 'node:path'
 import { createInterface } from 'node:readline'
 
@@ -31,6 +32,8 @@ const BRIDGE_PORT = Number.parseInt(process.env.BRIDGE_PORT ?? '8787', 10)
 const BRIDGE_PATH = process.env.BRIDGE_PATH ?? '/bridge'
 const BRIDGE_STATIC_ROOT = parseOptionalTrimmedString(process.env.BRIDGE_STATIC_ROOT)
 const BRIDGE_STATIC_ROOT_RESOLVED = BRIDGE_STATIC_ROOT ? resolve(BRIDGE_STATIC_ROOT) : null
+const BRIDGE_DEV_SERVER_ORIGIN = parseOptionalTrimmedString(process.env.BRIDGE_DEV_SERVER_ORIGIN)
+const BRIDGE_DEV_SERVER_URL = BRIDGE_DEV_SERVER_ORIGIN ? new URL(BRIDGE_DEV_SERVER_ORIGIN) : null
 const BRIDGE_CWD = process.cwd()
 const BRIDGE_DISABLE_CODEX_SPAWN = process.env.BRIDGE_DISABLE_CODEX_SPAWN === '1'
 const browserAuthConfig = resolveBrowserAuthConfig(process.env)
@@ -38,6 +41,12 @@ const browserAuth = new BrowserAuthService(browserAuthConfig)
 
 if (!Number.isFinite(BRIDGE_PORT) || BRIDGE_PORT <= 0) {
   throw new Error(`Invalid BRIDGE_PORT: ${process.env.BRIDGE_PORT ?? '(unset)'}`)
+}
+if (BRIDGE_STATIC_ROOT_RESOLVED && BRIDGE_DEV_SERVER_URL) {
+  throw new Error('BRIDGE_STATIC_ROOT and BRIDGE_DEV_SERVER_ORIGIN cannot be set together')
+}
+if (BRIDGE_DEV_SERVER_URL && BRIDGE_DEV_SERVER_URL.protocol !== 'http:' && BRIDGE_DEV_SERVER_URL.protocol !== 'https:') {
+  throw new Error(`Invalid BRIDGE_DEV_SERVER_ORIGIN protocol: ${BRIDGE_DEV_SERVER_URL.protocol}`)
 }
 
 type CodexAppHistoryUpsertBody = {
@@ -98,11 +107,21 @@ function parseLoginRequestBody(payload: unknown): LoginRequestBody | null {
   }
 }
 
-function extractRequestPath(req: IncomingMessage): string {
+function extractRequestPathAndSearch(req: IncomingMessage): { path: string, pathAndSearch: string } {
   try {
-    return new URL(req.url ?? '/', `http://${req.headers.host ?? `${BRIDGE_HOST}:${BRIDGE_PORT}`}`).pathname
+    const parsed = new URL(req.url ?? '/', `http://${req.headers.host ?? `${BRIDGE_HOST}:${BRIDGE_PORT}`}`)
+    return {
+      path: parsed.pathname,
+      pathAndSearch: `${parsed.pathname}${parsed.search}`,
+    }
   } catch {
-    return (req.url ?? '/').split('?')[0] || '/'
+    const raw = req.url ?? '/'
+    const path = raw.split('?')[0] || '/'
+    const pathAndSearch = raw.startsWith('/') ? raw : `/${raw}`
+    return {
+      path,
+      pathAndSearch,
+    }
   }
 }
 
@@ -256,6 +275,76 @@ async function tryServeStaticRequest(
   return true
 }
 
+async function tryServeDevProxyRequest(
+  req: IncomingMessage,
+  res: ServerResponse,
+  requestPath: string,
+  requestPathAndSearch: string,
+): Promise<boolean> {
+  if (!BRIDGE_DEV_SERVER_URL) {
+    return false
+  }
+  if (requestPath === BRIDGE_PATH) {
+    return false
+  }
+  if (req.method !== 'GET' && req.method !== 'HEAD') {
+    return false
+  }
+
+  const requestFn = BRIDGE_DEV_SERVER_URL.protocol === 'https:' ? httpsRequest : httpRequest
+  const upstreamHeaders = {
+    ...req.headers,
+    host: BRIDGE_DEV_SERVER_URL.host,
+  }
+
+  return await new Promise<boolean>((resolvePromise) => {
+    const upstreamRequest = requestFn(
+      {
+        protocol: BRIDGE_DEV_SERVER_URL.protocol,
+        hostname: BRIDGE_DEV_SERVER_URL.hostname,
+        port: BRIDGE_DEV_SERVER_URL.port || undefined,
+        method: req.method,
+        path: requestPathAndSearch,
+        headers: upstreamHeaders,
+      },
+      (upstreamResponse) => {
+        const bodyChunks: Buffer[] = []
+        upstreamResponse.on('data', (chunk) => {
+          bodyChunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk))
+        })
+        upstreamResponse.on('end', () => {
+          const body = Buffer.concat(bodyChunks)
+          const responseHeaders = {
+            ...upstreamResponse.headers,
+          }
+          delete responseHeaders['transfer-encoding']
+          responseHeaders['content-length'] = String(body.byteLength)
+          res.writeHead(upstreamResponse.statusCode ?? 502, responseHeaders)
+          if (req.method === 'HEAD') {
+            res.end()
+            resolvePromise(true)
+            return
+          }
+          res.end(body)
+          resolvePromise(true)
+        })
+        upstreamResponse.on('error', (error) => {
+          res.writeHead(502, { 'content-type': 'text/plain; charset=utf-8' })
+          res.end(`Failed to proxy development server request: ${error.message}\n`)
+          resolvePromise(true)
+        })
+      },
+    )
+
+    upstreamRequest.on('error', (error) => {
+      res.writeHead(502, { 'content-type': 'text/plain; charset=utf-8' })
+      res.end(`Failed to proxy development server request: ${error.message}\n`)
+      resolvePromise(true)
+    })
+    upstreamRequest.end()
+  })
+}
+
 async function readJsonRequestBody(req: IncomingMessage): Promise<unknown> {
   const chunks: Buffer[] = []
   await new Promise<void>((resolve, reject) => {
@@ -279,7 +368,7 @@ async function readJsonRequestBody(req: IncomingMessage): Promise<unknown> {
 }
 
 const httpServer = createServer((req, res) => {
-  const requestPath = extractRequestPath(req)
+  const { path: requestPath, pathAndSearch: requestPathAndSearch } = extractRequestPathAndSearch(req)
 
   if (requestPath === '/health') {
     respondJson(res, 200, { ok: true })
@@ -416,6 +505,22 @@ const httpServer = createServer((req, res) => {
         const message = error instanceof Error ? error.message : String(error)
         res.writeHead(500, { 'content-type': 'text/plain; charset=utf-8' })
         res.end(`Failed to serve static content: ${message}\n`)
+      })
+    return
+  }
+
+  if (BRIDGE_DEV_SERVER_URL) {
+    tryServeDevProxyRequest(req, res, requestPath, requestPathAndSearch)
+      .then((served) => {
+        if (served) {
+          return
+        }
+        respondBridgeInfo(res)
+      })
+      .catch((error) => {
+        const message = error instanceof Error ? error.message : String(error)
+        res.writeHead(502, { 'content-type': 'text/plain; charset=utf-8' })
+        res.end(`Failed to proxy development server request: ${message}\n`)
       })
     return
   }

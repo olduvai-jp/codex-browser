@@ -67,7 +67,9 @@ Start frontend and backend together:
 npm run dev
 ```
 
-`npm run dev` starts Vite and the bridge server, auto-selects a bridge port starting from `8787`, and shares the same `BRIDGE_PORT` between both processes.
+`npm run dev` runs the public CLI entrypoint in development mode (`CODEX_BROWSER_DEV=1`) without requiring a frontend build. It starts bridge + Vite automatically, prints one browser URL (for example `http://127.0.0.1:8787/`), and proxies frontend HTTP traffic through bridge on that single URL.
+
+In this CLI development mode, HMR is intentionally disabled. Use manual reload after frontend changes.
 
 Run each side separately:
 
@@ -76,11 +78,13 @@ npm run dev:frontend
 npm run dev:backend
 ```
 
-If you need a fixed port, pass the same `BRIDGE_PORT` to both commands:
+If you need a fixed bridge port for `npm run dev`, pass `--port` to the CLI through npm:
 
 ```sh
-BRIDGE_PORT=8788 npm run dev
+npm run dev -- --port 8788
 ```
+
+If you need standalone Vite behavior (including regular HMR), run `npm run dev:frontend` + `npm run dev:backend` separately.
 
 Frontend bridge URL resolution order:
 

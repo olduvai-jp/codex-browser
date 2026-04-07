@@ -10,6 +10,8 @@ import { fileURLToPath } from 'node:url'
 
 const DEFAULT_BRIDGE_HOST = '127.0.0.1'
 const DEFAULT_BRIDGE_PORT = 8787
+const DEFAULT_VITE_HOST = '127.0.0.1'
+const DEFAULT_VITE_PORT = 5173
 const MAX_SCAN_ATTEMPTS = 200
 
 function parsePort(raw, optionName) {
@@ -132,6 +134,38 @@ async function resolveBridgePort(host, explicitPort) {
   )
 }
 
+async function resolveVitePort(explicitPort) {
+  if (typeof explicitPort === 'number') {
+    const available = await isPortAvailable(DEFAULT_VITE_HOST, explicitPort)
+    if (!available) {
+      throw new Error(`Requested CODEX_BROWSER_DEV_VITE_PORT is already in use: ${explicitPort}`)
+    }
+    return explicitPort
+  }
+
+  for (let offset = 0; offset <= MAX_SCAN_ATTEMPTS; offset += 1) {
+    const candidate = DEFAULT_VITE_PORT + offset
+    if (candidate > 65535) {
+      break
+    }
+    if (await isPortAvailable(DEFAULT_VITE_HOST, candidate)) {
+      return candidate
+    }
+  }
+
+  throw new Error(
+    `Failed to find an available Vite port from ${DEFAULT_VITE_PORT} to ${DEFAULT_VITE_PORT + MAX_SCAN_ATTEMPTS}`,
+  )
+}
+
+function resolveDevVitePortOverride() {
+  const raw = process.env.CODEX_BROWSER_DEV_VITE_PORT?.trim()
+  if (!raw) {
+    return undefined
+  }
+  return parsePort(raw, 'CODEX_BROWSER_DEV_VITE_PORT')
+}
+
 function tryOpenBrowser(url) {
   let command = ''
   let args = []
@@ -164,6 +198,13 @@ async function assertRuntimeFilesExist(packageRoot) {
   await access(bridgeEntryPath)
 }
 
+async function assertBridgeRuntimeFilesExist(packageRoot) {
+  const bridgeEntryPath = join(packageRoot, 'server', 'bridge.ts')
+  const viteCliPath = join(packageRoot, 'node_modules', 'vite', 'bin', 'vite.js')
+  await access(bridgeEntryPath)
+  await access(viteCliPath)
+}
+
 function generateTemporaryAuthPassword() {
   return randomBytes(12).toString('hex')
 }
@@ -176,25 +217,54 @@ async function main() {
   }
 
   const packageRoot = resolve(dirname(fileURLToPath(import.meta.url)), '..')
-  await assertRuntimeFilesExist(packageRoot)
+  const isDevMode = process.env.CODEX_BROWSER_DEV === '1'
+  if (isDevMode) {
+    await assertBridgeRuntimeFilesExist(packageRoot)
+  } else {
+    await assertRuntimeFilesExist(packageRoot)
+  }
 
   const bridgePort = await resolveBridgePort(options.host, options.port)
   const bridgeEntryPath = join(packageRoot, 'server', 'bridge.ts')
   const staticRootPath = join(packageRoot, 'dist')
+  const viteCliPath = join(packageRoot, 'node_modules', 'vite', 'bin', 'vite.js')
   const temporaryAuthPassword = options.auth ? generateTemporaryAuthPassword() : ''
-  const childEnv = {
+  const bridgeEnv = {
     ...process.env,
     BRIDGE_HOST: options.host,
     BRIDGE_PORT: String(bridgePort),
-    BRIDGE_STATIC_ROOT: staticRootPath,
     BRIDGE_AUTH_PASSWORD: temporaryAuthPassword,
+  }
+  let viteProcess = null
+
+  if (isDevMode) {
+    const vitePort = await resolveVitePort(resolveDevVitePortOverride())
+    const viteOrigin = `http://${DEFAULT_VITE_HOST}:${vitePort}`
+    const viteEnv = {
+      ...process.env,
+      CODEX_BROWSER_DEV: '1',
+      BRIDGE_HOST: options.host,
+      BRIDGE_PORT: String(bridgePort),
+      VITE_PORT: String(vitePort),
+    }
+    viteProcess = spawn(process.execPath, [viteCliPath, '--host', DEFAULT_VITE_HOST, '--port', String(vitePort), '--strictPort'], {
+      cwd: packageRoot,
+      env: viteEnv,
+      stdio: 'inherit',
+    })
+    bridgeEnv.BRIDGE_DEV_SERVER_ORIGIN = viteOrigin
+    console.log(`[codex-browser] Development mode enabled via CODEX_BROWSER_DEV=1.`)
+    console.log(`[codex-browser] Frontend proxy target: ${viteOrigin}`)
+  } else {
+    bridgeEnv.BRIDGE_STATIC_ROOT = staticRootPath
   }
 
   const bridgeProcess = spawn(process.execPath, ['--import', 'tsx', bridgeEntryPath], {
     cwd: packageRoot,
-    env: childEnv,
+    env: bridgeEnv,
     stdio: 'inherit',
   })
+  const children = viteProcess ? [bridgeProcess, viteProcess] : [bridgeProcess]
 
   const browserHost = options.host === '0.0.0.0' ? '127.0.0.1' : options.host
   const launchUrl = `http://${browserHost}:${bridgePort}/`
@@ -210,31 +280,68 @@ async function main() {
   }
 
   let shuttingDown = false
+  let exitCode = 0
+  let exitSignal = null
+
+  const maybeExit = () => {
+    if (children.some((child) => child.exitCode === null && child.signalCode === null)) {
+      return
+    }
+
+    if (exitSignal) {
+      process.kill(process.pid, exitSignal)
+      return
+    }
+
+    process.exit(exitCode)
+  }
+
   const shutdown = (signal) => {
     if (shuttingDown) {
       return
     }
     shuttingDown = true
-    if (!bridgeProcess.killed && bridgeProcess.exitCode === null) {
-      bridgeProcess.kill(signal)
+    for (const child of children) {
+      if (!child.killed && child.exitCode === null && child.signalCode === null) {
+        child.kill(signal)
+      }
     }
   }
 
-  process.once('SIGINT', () => shutdown('SIGINT'))
-  process.once('SIGTERM', () => shutdown('SIGTERM'))
-
-  bridgeProcess.once('error', (error) => {
-    console.error(`[codex-browser] Failed to launch bridge: ${error.message}`)
-    process.exit(1)
+  process.once('SIGINT', () => {
+    exitSignal = 'SIGINT'
+    shutdown('SIGINT')
+  })
+  process.once('SIGTERM', () => {
+    exitSignal = 'SIGTERM'
+    shutdown('SIGTERM')
   })
 
-  bridgeProcess.once('exit', (code, signal) => {
-    if (signal) {
-      process.kill(process.pid, signal)
-      return
-    }
-    process.exit(code ?? 1)
-  })
+  for (const child of children) {
+    child.once('error', (error) => {
+      if (child === bridgeProcess) {
+        console.error(`[codex-browser] Failed to launch bridge: ${error.message}`)
+      } else {
+        console.error(`[codex-browser] Failed to launch Vite dev server: ${error.message}`)
+      }
+      exitCode = 1
+      shutdown()
+      maybeExit()
+    })
+
+    child.once('exit', (code, signal) => {
+      if (!shuttingDown) {
+        exitCode = code ?? 0
+        exitSignal = signal
+        shutdown(signal ?? undefined)
+      } else if (exitCode === 0 && typeof code === 'number' && code !== 0) {
+        exitCode = code
+      } else if (!exitSignal && signal) {
+        exitSignal = signal
+      }
+      maybeExit()
+    })
+  }
 }
 
 void main().catch((error) => {

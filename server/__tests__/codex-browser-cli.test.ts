@@ -152,4 +152,21 @@ describe('codex-browser cli', () => {
     expect(result.stdout).toContain('[codex-browser] Browser auth is enabled for this launch only.')
     expect(result.stdout).toMatch(/Browser auth password: [a-f0-9]{24}/)
   })
+
+  it('starts in development mode when CODEX_BROWSER_DEV=1 is set', async () => {
+    const port = await findAvailablePort()
+    const result = await runCliUntilMatch(
+      ['--port', String(port)],
+      (stdout) =>
+        stdout.includes('[codex-browser] Development mode enabled via CODEX_BROWSER_DEV=1.')
+        && stdout.includes(`[codex-browser] UI: http://127.0.0.1:${port}/`),
+      {
+        CODEX_BROWSER_DEV: '1',
+        BRIDGE_DISABLE_CODEX_SPAWN: '1',
+      },
+    )
+
+    expect(result.stdout).toContain('[codex-browser] Development mode enabled via CODEX_BROWSER_DEV=1.')
+    expect(result.stdout).toContain(`[codex-browser] UI: http://127.0.0.1:${port}/`)
+  })
 })

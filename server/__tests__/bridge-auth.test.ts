@@ -106,8 +106,7 @@ async function startBridge(extraEnv: Record<string, string | undefined>): Promis
       BRIDGE_HOST: '127.0.0.1',
       BRIDGE_PORT: String(port),
       BRIDGE_DISABLE_CODEX_SPAWN: '1',
-      CODEX_BROWSER_AUTH_USERNAME: '',
-      CODEX_BROWSER_AUTH_PASSWORD: '',
+      BRIDGE_AUTH_PASSWORD: '',
       ...extraEnv,
     },
     stdio: ['ignore', 'pipe', 'pipe'],
@@ -181,10 +180,9 @@ async function connectWs(url: string, headers?: Record<string, string>): Promise
 }
 
 describe.sequential('bridge browser auth', () => {
-  it('keeps API and websocket accessible when auth env vars are absent', async () => {
+  it('keeps API and websocket accessible when bridge auth password is absent', async () => {
     const bridge = await startBridge({
-      CODEX_BROWSER_AUTH_USERNAME: '',
-      CODEX_BROWSER_AUTH_PASSWORD: '',
+      BRIDGE_AUTH_PASSWORD: '',
     })
 
     try {
@@ -207,8 +205,7 @@ describe.sequential('bridge browser auth', () => {
 
   it('enforces login on API and websocket when auth is enabled', async () => {
     const bridge = await startBridge({
-      CODEX_BROWSER_AUTH_USERNAME: 'alice',
-      CODEX_BROWSER_AUTH_PASSWORD: 'secret-pass',
+      BRIDGE_AUTH_PASSWORD: 'secret-pass',
     })
 
     try {
@@ -231,7 +228,6 @@ describe.sequential('bridge browser auth', () => {
           accept: 'application/json',
         },
         body: JSON.stringify({
-          username: 'alice',
           password: 'wrong-pass',
         }),
       })
@@ -244,7 +240,6 @@ describe.sequential('bridge browser auth', () => {
           accept: 'application/json',
         },
         body: JSON.stringify({
-          username: 'alice',
           password: 'secret-pass',
         }),
       })

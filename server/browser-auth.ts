@@ -1,24 +1,20 @@
 import { randomUUID } from 'node:crypto'
 import type { IncomingMessage } from 'node:http'
 
-export const BROWSER_AUTH_USERNAME_ENV_KEY = 'CODEX_BROWSER_AUTH_USERNAME'
-export const BROWSER_AUTH_PASSWORD_ENV_KEY = 'CODEX_BROWSER_AUTH_PASSWORD'
+export const BRIDGE_AUTH_PASSWORD_ENV_KEY = 'BRIDGE_AUTH_PASSWORD'
 export const BROWSER_AUTH_SESSION_COOKIE_NAME = 'codex_browser_session'
 
 export type BrowserAuthConfig = {
   enabled: boolean
-  username: string
   password: string
 }
 
 type BrowserAuthSession = {
   id: string
-  username: string
 }
 
 export type BrowserAuthSessionState = {
   authenticated: boolean
-  username?: string
 }
 
 function parseOptionalTrimmedString(value: unknown): string {
@@ -86,13 +82,11 @@ function isSecureRequest(request: Pick<IncomingMessage, 'headers' | 'socket'>): 
 }
 
 export function resolveBrowserAuthConfig(env: Record<string, string | undefined> = process.env): BrowserAuthConfig {
-  const username = parseOptionalTrimmedString(env[BROWSER_AUTH_USERNAME_ENV_KEY])
-  const password = parseOptionalTrimmedString(env[BROWSER_AUTH_PASSWORD_ENV_KEY])
-  const enabled = username.length > 0 && password.length > 0
+  const password = parseOptionalTrimmedString(env[BRIDGE_AUTH_PASSWORD_ENV_KEY])
+  const enabled = password.length > 0
 
   return {
     enabled,
-    username,
     password,
   }
 }
@@ -106,17 +100,17 @@ export class BrowserAuthService {
     return this.config.enabled
   }
 
-  authenticateCredentials(username: string, password: string): boolean {
+  authenticatePassword(password: string): boolean {
     if (!this.config.enabled) {
       return false
     }
 
-    return username === this.config.username && password === this.config.password
+    return password === this.config.password
   }
 
-  createSession(username: string): string {
+  createSession(): string {
     const id = randomUUID()
-    this.sessions.set(id, { id, username })
+    this.sessions.set(id, { id })
     return id
   }
 
@@ -145,8 +139,7 @@ export class BrowserAuthService {
       }
     }
 
-    const session = this.sessions.get(sessionId)
-    if (!session) {
+    if (!this.sessions.has(sessionId)) {
       return {
         authenticated: false,
       }
@@ -154,7 +147,6 @@ export class BrowserAuthService {
 
     return {
       authenticated: true,
-      username: session.username,
     }
   }
 
@@ -193,4 +185,3 @@ export class BrowserAuthService {
     return attributes.join('; ')
   }
 }
-

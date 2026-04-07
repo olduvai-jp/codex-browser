@@ -26,6 +26,7 @@ Common commands:
 
 ```sh
 npx @olduvai-jp/codex-browser --open
+npx @olduvai-jp/codex-browser --auth
 npx @olduvai-jp/codex-browser --host 0.0.0.0 --port 9000
 npx @olduvai-jp/codex-browser --help
 ```
@@ -34,20 +35,23 @@ CLI options:
 
 - `--host <host>`: bind host (default `127.0.0.1`)
 - `--port <port>`: use a fixed port and fail if it is already in use
+- `--auth`: enable browser auth with a temporary password for this launch
 - `--open`: open the browser after launch
 - `--help`: show CLI help
 
 ## Optional Browser Auth
 
-To require a login page before opening the UI, set both auth environment variables:
+To require a login page before opening the UI, pass `--auth`:
 
 ```sh
-CODEX_BROWSER_AUTH_USERNAME=alice \
-CODEX_BROWSER_AUTH_PASSWORD=secret \
-npx @olduvai-jp/codex-browser
+npx @olduvai-jp/codex-browser --auth
 ```
 
-If either variable is missing, browser auth stays disabled.
+When `--auth` is enabled:
+
+- The CLI prints a temporary password in your terminal.
+- You enter that password on `/login` in the browser.
+- A new password is generated each time you launch; it is not persisted.
 
 ## Development
 

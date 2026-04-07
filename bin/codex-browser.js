@@ -1,6 +1,7 @@
 #!/usr/bin/env node
 
 import { spawn } from 'node:child_process'
+import { randomBytes } from 'node:crypto'
 import { access } from 'node:fs/promises'
 import { createServer } from 'node:net'
 import { dirname, join, resolve } from 'node:path'
@@ -27,6 +28,7 @@ function printHelp() {
       'Options:',
       '  --host <host>  Bind host (default: 127.0.0.1)',
       '  --port <port>  Bind port; fails if already in use',
+      '  --auth         Enable browser auth with a one-time password',
       '  --open         Open browser after launch',
       '  --help         Show this help',
     ].join('\n'),
@@ -37,6 +39,7 @@ function parseArguments(argv) {
   const options = {
     host: DEFAULT_BRIDGE_HOST,
     port: undefined,
+    auth: false,
     open: false,
     help: false,
   }
@@ -45,6 +48,10 @@ function parseArguments(argv) {
     const arg = argv[index]
     if (arg === '--open') {
       options.open = true
+      continue
+    }
+    if (arg === '--auth') {
+      options.auth = true
       continue
     }
     if (arg === '--help' || arg === '-h') {
@@ -157,6 +164,10 @@ async function assertRuntimeFilesExist(packageRoot) {
   await access(bridgeEntryPath)
 }
 
+function generateTemporaryAuthPassword() {
+  return randomBytes(12).toString('hex')
+}
+
 async function main() {
   const options = parseArguments(process.argv.slice(2))
   if (options.help) {
@@ -170,11 +181,13 @@ async function main() {
   const bridgePort = await resolveBridgePort(options.host, options.port)
   const bridgeEntryPath = join(packageRoot, 'server', 'bridge.ts')
   const staticRootPath = join(packageRoot, 'dist')
+  const temporaryAuthPassword = options.auth ? generateTemporaryAuthPassword() : ''
   const childEnv = {
     ...process.env,
     BRIDGE_HOST: options.host,
     BRIDGE_PORT: String(bridgePort),
     BRIDGE_STATIC_ROOT: staticRootPath,
+    BRIDGE_AUTH_PASSWORD: temporaryAuthPassword,
   }
 
   const bridgeProcess = spawn(process.execPath, ['--import', 'tsx', bridgeEntryPath], {
@@ -186,6 +199,10 @@ async function main() {
   const browserHost = options.host === '0.0.0.0' ? '127.0.0.1' : options.host
   const launchUrl = `http://${browserHost}:${bridgePort}/`
   console.log(`[codex-browser] UI: ${launchUrl}`)
+  if (options.auth) {
+    console.log('[codex-browser] Browser auth is enabled for this launch only.')
+    console.log(`[codex-browser] Browser auth password: ${temporaryAuthPassword}`)
+  }
   if (options.open) {
     tryOpenBrowser(launchUrl)
   } else {

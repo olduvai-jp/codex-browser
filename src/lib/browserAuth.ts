@@ -1,7 +1,6 @@
 type BrowserAuthSession = {
   authEnabled: boolean
   authenticated: boolean
-  username?: string
 }
 
 type BrowserAuthSessionErrorBehavior = 'assume-auth-disabled' | 'assume-auth-required'
@@ -46,14 +45,10 @@ function parseAuthSession(
 
   const authEnabled = payload.authEnabled === true
   const authenticated = authEnabled ? payload.authenticated === true : true
-  const username = typeof payload.username === 'string' && payload.username.trim().length > 0
-    ? payload.username.trim()
-    : undefined
 
   return {
     authEnabled,
     authenticated,
-    ...(username ? { username } : {}),
   }
 }
 
@@ -114,7 +109,7 @@ export async function readBrowserAuthSession(
   return cachedSession
 }
 
-export async function loginBrowserAuth(username: string, password: string): Promise<BrowserAuthRequestResult> {
+export async function loginBrowserAuth(password: string): Promise<BrowserAuthRequestResult> {
   const response = await fetch('/api/auth/login', {
     method: 'POST',
     headers: {
@@ -123,7 +118,6 @@ export async function loginBrowserAuth(username: string, password: string): Prom
     },
     credentials: 'same-origin',
     body: JSON.stringify({
-      username,
       password,
     }),
   })

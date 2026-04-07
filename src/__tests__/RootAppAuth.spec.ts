@@ -65,8 +65,7 @@ function resolvePathFromRequest(input: RequestInfo | URL): string {
 
 function setupAuthFetchMock(
   state: AuthFetchState,
-  expectedCredentials: { username: string; password: string } = {
-    username: 'alice',
+  expectedCredentials: { password: string } = {
     password: 'secret',
   },
 ): ReturnType<typeof vi.fn> {
@@ -86,7 +85,7 @@ function setupAuthFetchMock(
 
     if (requestPath === '/api/auth/login') {
       const body = typeof init?.body === 'string' ? JSON.parse(init.body) : {}
-      if (body.username === expectedCredentials.username && body.password === expectedCredentials.password) {
+      if (body.password === expectedCredentials.password) {
         state.authenticated = true
         return new Response(JSON.stringify({ ok: true }), {
           status: 200,
@@ -96,7 +95,7 @@ function setupAuthFetchMock(
         })
       }
 
-      return new Response(JSON.stringify({ error: 'Invalid username or password' }), {
+      return new Response(JSON.stringify({ error: 'Invalid password' }), {
         status: 401,
         headers: {
           'content-type': 'application/json',
@@ -190,7 +189,6 @@ describe.sequential('RootApp auth routing', () => {
     })
 
     const wrapper = await mountRootApp('/')
-    await wrapper.get('[data-testid="auth-login-username"]').setValue('alice')
     await wrapper.get('[data-testid="auth-login-password"]').setValue('secret')
     await wrapper.get('[data-testid="auth-login-submit"]').trigger('submit')
     await flushPromises()

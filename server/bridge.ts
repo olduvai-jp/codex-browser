@@ -5,7 +5,6 @@ import { extname, resolve, sep } from 'node:path'
 import { createInterface } from 'node:readline'
 
 import { WebSocketServer, WebSocket, type RawData } from 'ws'
-import { config as loadEnv } from 'dotenv'
 
 import {
   createBridgeLog,
@@ -26,8 +25,6 @@ import {
 import { listDirectoryChildren } from './directory-listing'
 import { listCodexAppHistory, upsertCodexAppHistoryEntry } from './codex-app-history'
 import { BrowserAuthService, resolveBrowserAuthConfig } from './browser-auth'
-
-loadEnv()
 
 const BRIDGE_HOST = process.env.BRIDGE_HOST ?? '127.0.0.1'
 const BRIDGE_PORT = Number.parseInt(process.env.BRIDGE_PORT ?? '8787', 10)
@@ -83,7 +80,6 @@ function parseCodexAppHistoryUpsertBody(payload: unknown): CodexAppHistoryUpsert
 }
 
 type LoginRequestBody = {
-  username: string
   password: string
 }
 
@@ -92,14 +88,12 @@ function parseLoginRequestBody(payload: unknown): LoginRequestBody | null {
     return null
   }
 
-  const username = parseOptionalTrimmedString(payload.username)
   const password = parseOptionalTrimmedString(payload.password)
-  if (!username || !password) {
+  if (!password) {
     return null
   }
 
   return {
-    username,
     password,
   }
 }
@@ -297,7 +291,6 @@ const httpServer = createServer((req, res) => {
     respondJson(res, 200, {
       authEnabled: browserAuthConfig.enabled,
       authenticated: browserAuthConfig.enabled ? session.authenticated : true,
-      ...(session.username ? { username: session.username } : {}),
     })
     return
   }
@@ -315,12 +308,12 @@ const httpServer = createServer((req, res) => {
           respondJson(res, 400, { error: 'Invalid request body' })
           return
         }
-        if (!browserAuth.authenticateCredentials(body.username, body.password)) {
-          respondJson(res, 401, { error: 'Invalid username or password' })
+        if (!browserAuth.authenticatePassword(body.password)) {
+          respondJson(res, 401, { error: 'Invalid password' })
           return
         }
 
-        const sessionId = browserAuth.createSession(body.username)
+        const sessionId = browserAuth.createSession()
         const sessionCookie = browserAuth.createSessionCookieHeader(req, sessionId)
         respondJson(res, 200, { ok: true }, { 'set-cookie': sessionCookie })
       })

@@ -3,12 +3,11 @@ import { nextTick, onMounted, ref } from 'vue'
 import router from '@/router'
 import { loginBrowserAuth, readBrowserAuthSession } from '@/lib/browserAuth'
 
-const username = ref('')
 const password = ref('')
 const submitInProgress = ref(false)
 const loginSuccess = ref(false)
 const errorMessage = ref('')
-const usernameInputRef = ref<HTMLInputElement | null>(null)
+const passwordInputRef = ref<HTMLInputElement | null>(null)
 
 async function redirectIfAuthenticated(): Promise<void> {
   const session = await readBrowserAuthSession({
@@ -25,17 +24,16 @@ async function handleSubmit(): Promise<void> {
     return
   }
 
-  const nextUsername = username.value.trim()
   const nextPassword = password.value.trim()
-  if (nextUsername.length === 0 || nextPassword.length === 0) {
-    errorMessage.value = 'ユーザー名とパスワードを入力してください。'
+  if (nextPassword.length === 0) {
+    errorMessage.value = 'パスワードを入力してください。'
     return
   }
 
   submitInProgress.value = true
   errorMessage.value = ''
   try {
-    const loginResult = await loginBrowserAuth(nextUsername, nextPassword)
+    const loginResult = await loginBrowserAuth(nextPassword)
     if (!loginResult.ok) {
       errorMessage.value = loginResult.error ?? 'ログインに失敗しました。'
       return
@@ -54,7 +52,7 @@ async function handleSubmit(): Promise<void> {
 onMounted(() => {
   void redirectIfAuthenticated()
   nextTick(() => {
-    usernameInputRef.value?.focus()
+    passwordInputRef.value?.focus()
   })
 })
 </script>
@@ -70,27 +68,15 @@ onMounted(() => {
         </div>
         <div>
           <h1 class="text-lg font-semibold">ログイン</h1>
-          <p class="text-sm text-text-muted">設定済みのユーザー名とパスワードでログインしてください。</p>
+          <p class="text-sm text-text-muted">起動したターミナルに表示されたパスワードを入力してください。</p>
         </div>
       </div>
 
       <form class="mt-6 space-y-5" data-testid="auth-login-form" @submit.prevent="handleSubmit">
         <label class="block space-y-1.5">
-          <span class="text-sm font-medium text-text-secondary">ユーザー名</span>
-          <input
-            ref="usernameInputRef"
-            v-model="username"
-            type="text"
-            autocomplete="username"
-            placeholder="ユーザー名を入力"
-            class="w-full rounded-lg border border-border-default bg-surface-secondary px-3 py-2.5 text-sm text-text-primary placeholder:text-text-muted outline-none transition-colors focus:border-accent focus:ring-2 focus:ring-accent/20"
-            data-testid="auth-login-username"
-          >
-        </label>
-
-        <label class="block space-y-1.5">
           <span class="text-sm font-medium text-text-secondary">パスワード</span>
           <input
+            ref="passwordInputRef"
             v-model="password"
             type="password"
             autocomplete="current-password"

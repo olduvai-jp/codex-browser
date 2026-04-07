@@ -1,143 +1,159 @@
 # @olduvai-jp/codex-browser
 
-A browser-based chat client for [Codex](https://github.com/openai/codex) AI, built with Vue 3 and connected via a WebSocket bridge server.
+Browser UI for Codex. This package starts a local bridge server, serves the web app, and connects the browser client to the local `codex` app server over stdio.
 
-![Workspace sidebar](docs/image.png)
+## Quick Start
 
-## Features
+Requirements:
 
-- Chat interface with timeline-based message display
-- Thread history grouped by workspace
-- Workspace selection and directory browsing
-- Model selection and thinking effort controls
-- Tool call visibility and approval workflows
-- Advanced debug panel (logs, metrics, tool calls)
+- Node.js `^20.19.0 || >=22.12.0`
+- [`codex`](https://github.com/openai/codex) installed and available in `PATH`
 
-## Tech Stack
-
-- **Frontend:** Vue 3 + TypeScript + Vite
-- **Styling:** Tailwind CSS
-- **State:** Pinia
-- **Bridge:** Node.js WebSocket server (ws)
-
-## Architecture
-
-```
-Browser (Vue SPA)  <──WebSocket──>  Bridge Server (Node.js)  <──stdio──>  Codex Process
-```
-
-- `src/` — Frontend application (components, composables, router)
-- `server/` — WebSocket bridge server that spawns and communicates with the Codex process
-
-## Run with npx (published package)
-
-Node.js `^20.19.0 || >=22.12.0` is required.
+Run:
 
 ```sh
 npx @olduvai-jp/codex-browser
 ```
 
-By default, the CLI prints a local URL and keeps running.
-It does **not** open a browser unless you pass `--open`.
+What happens next:
+
+- A local URL is printed, such as `http://127.0.0.1:8787/`
+- The process keeps running until you stop it
+- The browser does not open automatically unless you pass `--open`
+- Launch fails if the `codex` command is not available
+
+Common commands:
 
 ```sh
 npx @olduvai-jp/codex-browser --open
 npx @olduvai-jp/codex-browser --host 0.0.0.0 --port 9000
+npx @olduvai-jp/codex-browser --help
 ```
 
-Available options:
+CLI options:
 
 - `--host <host>`: bind host (default `127.0.0.1`)
-- `--port <port>`: fixed port (fails if already in use)
-- `--open`: open browser after launch
+- `--port <port>`: use a fixed port and fail if it is already in use
+- `--open`: open the browser after launch
 - `--help`: show CLI help
 
-Optional browser auth env vars:
+## Optional Browser Auth
+
+To require a login page before opening the UI, set both auth environment variables:
 
 ```sh
-CODEX_BROWSER_AUTH_USERNAME=alice CODEX_BROWSER_AUTH_PASSWORD=secret npx @olduvai-jp/codex-browser
+CODEX_BROWSER_AUTH_USERNAME=alice \
+CODEX_BROWSER_AUTH_PASSWORD=secret \
+npx @olduvai-jp/codex-browser
 ```
 
-## Project Setup
+If either variable is missing, browser auth stays disabled.
+
+## Development
+
+Install dependencies:
 
 ```sh
 npm install
 ```
 
-### Run in Development
+Start frontend and backend together:
 
 ```sh
 npm run dev
 ```
 
-`npm run dev` starts both frontend (Vite) and backend bridge server.
-It auto-selects a bridge port, starting from `8787`, and uses the same `BRIDGE_PORT` for both processes.
+`npm run dev` starts Vite and the bridge server, auto-selects a bridge port starting from `8787`, and shares the same `BRIDGE_PORT` between both processes.
 
-You can also run each side separately:
+Run each side separately:
 
 ```sh
 npm run dev:frontend
 npm run dev:backend
 ```
 
-When running separately, pass the same `BRIDGE_PORT` to both commands if you need a non-default port.
-
-The frontend resolves the bridge WebSocket URL automatically with this priority:
-
-1. `bridgeUrl` query parameter (example: `http://localhost:5173/?bridgeUrl=ws://127.0.0.1:8787/bridge`)
-2. `VITE_BRIDGE_WS_URL`
-3. `ws(s)://<current-host>/bridge` from browser location
-4. `ws://127.0.0.1:8787/bridge` (default)
-
-When using `npm run dev:frontend`, Vite proxies `/bridge` websocket traffic to `ws://127.0.0.1:${BRIDGE_PORT:-8787}`, so priority 3 works in local development as well.
-
-To force a specific bridge port instead of auto-selection, set `BRIDGE_PORT` explicitly:
+If you need a fixed port, pass the same `BRIDGE_PORT` to both commands:
 
 ```sh
 BRIDGE_PORT=8788 npm run dev
 ```
 
-### Type-Check, Compile and Minify for Production
+Frontend bridge URL resolution order:
+
+1. `bridgeUrl` query parameter, for example `http://localhost:5173/?bridgeUrl=ws://127.0.0.1:8787/bridge`
+2. `VITE_BRIDGE_WS_URL`
+3. `ws(s)://<current-host>/bridge` from the browser location
+4. `ws://127.0.0.1:8787/bridge`
+
+When using `npm run dev:frontend`, Vite proxies `/bridge` WebSocket traffic to `ws://127.0.0.1:${BRIDGE_PORT:-8787}`, so option 3 works in local development too.
+
+## Tests and Checks
+
+Build the app:
 
 ```sh
 npm run build
 ```
 
-### Run Unit Tests with [Vitest](https://vitest.dev/)
+Type-check:
+
+```sh
+npm run type-check
+```
+
+Run unit tests with [Vitest](https://vitest.dev/):
 
 ```sh
 npm run test:unit
 ```
 
-### Run End-to-End Tests with [Playwright](https://playwright.dev)
+Run end-to-end tests with [Playwright](https://playwright.dev):
 
 ```sh
-# Install browsers for the first run
 npx playwright install
-
-# When testing on CI, must build the project first
 npm run build
-
-# Runs the end-to-end tests
 npm run test:e2e
-# Runs the tests only on Chromium
 npm run test:e2e -- --project=chromium
-# Runs the tests of a specific file
-npm run test:e2e -- tests/example.spec.ts
-# Runs the tests in debug mode
+npm run test:e2e -- e2e/vue.spec.ts
 npm run test:e2e -- --debug
+```
 
-# Screenshot modes
-npm run test:e2e:screenshot        # always save screenshots
-npm run test:e2e:screenshot:fail   # save only on failure
-npm run test:e2e:screenshot:off    # explicitly disable screenshots
+Screenshot modes:
 
-# Or control via env var directly (cross-platform)
+```sh
+npm run test:e2e:screenshot
+npm run test:e2e:screenshot:fail
+npm run test:e2e:screenshot:off
 npx cross-env PW_SCREENSHOT_MODE=only-on-failure npm run test:e2e
 ```
 
-### Lint with [ESLint](https://eslint.org/)
+Lint with [ESLint](https://eslint.org/):
 
 ```sh
 npm run lint
 ```
+
+## Features
+
+- Chat UI with timeline-based message display
+- Thread history grouped by workspace
+- Workspace selection and directory browsing
+- Model selection and thinking-effort controls
+- Tool call visibility and approval workflows
+- Debug panel for logs, metrics, and tool calls
+
+## Architecture
+
+```text
+Browser (Vue SPA)  <->  Bridge Server (Node.js)  <->  Codex Process
+```
+
+- `src/`: frontend application
+- `server/`: bridge server that spawns and communicates with the Codex process
+
+## Tech Stack
+
+- Frontend: Vue 3 + TypeScript + Vite
+- Styling: Tailwind CSS
+- State: Pinia
+- Bridge: Node.js WebSocket server (`ws`)

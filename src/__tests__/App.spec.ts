@@ -2425,12 +2425,12 @@ describe('App.vue ui phase-1 flows', () => {
     expect(findRequestCall('configRequirements/read')?.params).toBeUndefined()
     expect(wrapper.text()).toContain('会話 ID: thread-execution-mode-autoload-1')
     expect((wrapper.get('select[data-testid="execution-mode-select"]').element as HTMLSelectElement).value).toBe(
-      'full-auto',
+      'auto',
     )
     expect(
       wrapper
         .get('select[data-testid="execution-mode-select"]')
-        .find('option[value="dangerously-bypass"]')
+        .find('option[value="full-access"]')
         .attributes('disabled'),
     ).toBeDefined()
 
@@ -2475,8 +2475,8 @@ describe('App.vue ui phase-1 flows', () => {
     await flushPromises()
 
     const select = wrapper.get('select[data-testid="execution-mode-select"]')
-    expect((select.element as HTMLSelectElement).value).toBe('full-auto')
-    const dangerOption = select.find('option[value="dangerously-bypass"]')
+    expect((select.element as HTMLSelectElement).value).toBe('auto')
+    const dangerOption = select.find('option[value="full-access"]')
     expect(dangerOption.attributes('disabled')).toBeDefined()
     expect(findRequestCall('configRequirements/read')?.params).toBeUndefined()
     wrapper.unmount()
@@ -2517,7 +2517,7 @@ describe('App.vue ui phase-1 flows', () => {
 
     const dangerOption = wrapper
       .get('select[data-testid="execution-mode-select"]')
-      .find('option[value="dangerously-bypass"]')
+      .find('option[value="full-access"]')
     expect(dangerOption.attributes('disabled')).toBeUndefined()
     wrapper.unmount()
   })
@@ -2555,7 +2555,7 @@ describe('App.vue ui phase-1 flows', () => {
 
     const dangerOption = wrapper
       .get('select[data-testid="execution-mode-select"]')
-      .find('option[value="dangerously-bypass"]')
+      .find('option[value="full-access"]')
     expect(dangerOption.attributes('disabled')).toBeDefined()
     wrapper.unmount()
   })
@@ -2593,7 +2593,7 @@ describe('App.vue ui phase-1 flows', () => {
 
     const dangerOption = wrapper
       .get('select[data-testid="execution-mode-select"]')
-      .find('option[value="dangerously-bypass"]')
+      .find('option[value="full-access"]')
     expect(dangerOption.attributes('disabled')).toBeDefined()
     wrapper.unmount()
   })
@@ -2643,7 +2643,7 @@ describe('App.vue ui phase-1 flows', () => {
     await bridge.loadConfig()
     await flushPromises()
 
-    expect(bridge.executionModeCurrentPreset.value).toBe('dangerously-bypass')
+    expect(bridge.executionModeCurrentPreset.value).toBe('full-access')
 
     await bridge.startThread()
     await flushPromises()
@@ -2698,7 +2698,7 @@ describe('App.vue ui phase-1 flows', () => {
     await bridge.loadConfig()
     await flushPromises()
 
-    expect(bridge.executionModeCurrentPreset.value).toBe('dangerously-bypass')
+    expect(bridge.executionModeCurrentPreset.value).toBe('full-access')
 
     await bridge.startThread()
     await flushPromises()
@@ -2707,8 +2707,8 @@ describe('App.vue ui phase-1 flows', () => {
       approvalPolicy: 'never',
       sandboxMode: 'danger-full-access',
     })
-    expect(bridge.executionModeCurrentPreset.value).toBe('dangerously-bypass')
-    expect(bridge.selectedExecutionModePreset.value).toBe('dangerously-bypass')
+    expect(bridge.executionModeCurrentPreset.value).toBe('full-access')
+    expect(bridge.selectedExecutionModePreset.value).toBe('full-access')
 
     wrapper.unmount()
   })
@@ -2770,7 +2770,7 @@ describe('App.vue ui phase-1 flows', () => {
     await bridge.startThread()
     await flushPromises()
 
-    expect(bridge.executionModeCurrentPreset.value).toBe('dangerously-bypass')
+    expect(bridge.executionModeCurrentPreset.value).toBe('full-access')
 
     bridge.messageInput.value = 'preserve execution mode'
     await bridge.sendTurn()
@@ -2780,13 +2780,13 @@ describe('App.vue ui phase-1 flows', () => {
       approvalPolicy: 'never',
       sandboxMode: 'danger-full-access',
     })
-    expect(bridge.executionModeCurrentPreset.value).toBe('dangerously-bypass')
-    expect(bridge.selectedExecutionModePreset.value).toBe('dangerously-bypass')
+    expect(bridge.executionModeCurrentPreset.value).toBe('full-access')
+    expect(bridge.selectedExecutionModePreset.value).toBe('full-access')
 
     wrapper.unmount()
   })
 
-  it('saves full-auto execution mode via config/batchWrite with expected payload', async () => {
+  it('saves auto execution mode via config/batchWrite with expected payload', async () => {
     let batchWriteCalled = false
     bridgeMock.setRequestHandler(async (method) => {
       if (method === 'initialize') {
@@ -2830,7 +2830,7 @@ describe('App.vue ui phase-1 flows', () => {
 
     const wrapper = mount(App)
     await connectAndInitialize(wrapper)
-    await getByTestId(wrapper, 'execution-mode-select').setValue('full-auto')
+    await getByTestId(wrapper, 'execution-mode-select').setValue('auto')
     await flushPromises()
     await getByTestId(wrapper, 'execution-mode-save-button').trigger('click')
     await flushPromises()
@@ -2855,7 +2855,7 @@ describe('App.vue ui phase-1 flows', () => {
         },
       ],
     })
-    expect((wrapper.get('select[data-testid="execution-mode-select"]').element as HTMLSelectElement).value).toBe('full-auto')
+    expect((wrapper.get('select[data-testid="execution-mode-select"]').element as HTMLSelectElement).value).toBe('auto')
     wrapper.unmount()
   })
 
@@ -2899,7 +2899,7 @@ describe('App.vue ui phase-1 flows', () => {
     await getByTestId(wrapper, 'load-config-button').trigger('click')
     await flushPromises()
 
-    await getByTestId(wrapper, 'execution-mode-select').setValue('dangerously-bypass')
+    await getByTestId(wrapper, 'execution-mode-select').setValue('full-access')
     await flushPromises()
     await getByTestId(wrapper, 'execution-mode-save-button').trigger('click')
     await flushPromises()

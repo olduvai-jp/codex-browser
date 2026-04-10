@@ -2,7 +2,7 @@ import { createServer, request as httpRequest, type IncomingMessage, type Server
 import { spawn, type ChildProcessWithoutNullStreams } from 'node:child_process'
 import { readFile, stat } from 'node:fs/promises'
 import { request as httpsRequest } from 'node:https'
-import { extname, resolve, sep } from 'node:path'
+import { extname, join, resolve, sep } from 'node:path'
 import { createInterface } from 'node:readline'
 
 import { WebSocketServer, WebSocket, type RawData } from 'ws'
@@ -26,6 +26,7 @@ import {
 import { listDirectoryChildren } from './directory-listing'
 import { listCodexAppHistory, upsertCodexAppHistoryEntry } from './codex-app-history'
 import { BrowserAuthService, resolveBrowserAuthConfig } from './browser-auth'
+import { computeSlashDiff } from './slash-diff'
 
 const BRIDGE_HOST = process.env.BRIDGE_HOST ?? '127.0.0.1'
 const BRIDGE_PORT = Number.parseInt(process.env.BRIDGE_PORT ?? '8787', 10)
@@ -91,6 +92,7 @@ function parseCodexAppHistoryUpsertBody(payload: unknown): CodexAppHistoryUpsert
 type LoginRequestBody = {
   password: string
 }
+const AGENTS_FILENAME = 'AGENTS.md'
 
 function parseLoginRequestBody(payload: unknown): LoginRequestBody | null {
   if (!isRecord(payload)) {
@@ -105,6 +107,16 @@ function parseLoginRequestBody(payload: unknown): LoginRequestBody | null {
   return {
     password,
   }
+}
+
+async function resolveRequestCwd(url: URL): Promise<string> {
+  const requestedCwd = parseOptionalTrimmedString(url.searchParams.get('cwd')) ?? BRIDGE_CWD
+  const resolvedCwd = resolve(requestedCwd)
+  const cwdStat = await stat(resolvedCwd)
+  if (!cwdStat.isDirectory()) {
+    throw new Error(`cwd is not a directory: ${resolvedCwd}`)
+  }
+  return resolvedCwd
 }
 
 function extractRequestPathAndSearch(req: IncomingMessage): { path: string, pathAndSearch: string } {
@@ -485,6 +497,45 @@ const httpServer = createServer((req, res) => {
             const message = error instanceof Error ? error.message : String(error)
             respondJson(res, 500, { error: message })
           })
+      })
+      .catch((error) => {
+        const message = error instanceof Error ? error.message : String(error)
+        respondJson(res, 400, { error: message })
+      })
+    return
+  }
+
+  if (req.method === 'GET' && requestPath === '/api/slash/diff') {
+    const url = new URL(req.url ?? requestPath, `http://${BRIDGE_HOST}:${BRIDGE_PORT}`)
+    resolveRequestCwd(url)
+      .then((cwd) => computeSlashDiff(cwd))
+      .then((result) => {
+        respondJson(res, 200, result)
+      })
+      .catch((error) => {
+        const message = error instanceof Error ? error.message : String(error)
+        respondJson(res, 400, { error: message })
+      })
+    return
+  }
+
+  if (req.method === 'GET' && requestPath === '/api/slash/init-status') {
+    const url = new URL(req.url ?? requestPath, `http://${BRIDGE_HOST}:${BRIDGE_PORT}`)
+    resolveRequestCwd(url)
+      .then(async (cwd) => {
+        const agentsPath = join(cwd, AGENTS_FILENAME)
+        let exists = false
+        try {
+          const agentsStat = await stat(agentsPath)
+          exists = agentsStat.isFile()
+        } catch {
+          exists = false
+        }
+        respondJson(res, 200, {
+          cwd,
+          agentsPath,
+          exists,
+        })
       })
       .catch((error) => {
         const message = error instanceof Error ? error.message : String(error)

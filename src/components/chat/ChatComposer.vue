@@ -86,17 +86,28 @@ function onThinkingChange(event: Event) {
 }
 
 function isExecutionModePresetAllowed(preset: ExecutionModePreset): boolean {
-  if (preset === 'full-auto') {
+  if (preset === 'read-only') {
+    return (
+      props.executionModeRequirements.allowedApprovalPolicies.includes('on-request') &&
+      props.executionModeRequirements.allowedSandboxModes.includes('read-only')
+    )
+  }
+
+  if (preset === 'auto') {
     return (
       props.executionModeRequirements.allowedApprovalPolicies.includes('on-request') &&
       props.executionModeRequirements.allowedSandboxModes.includes('workspace-write')
     )
   }
 
-  return (
-    props.executionModeRequirements.allowedApprovalPolicies.includes('never') &&
-    props.executionModeRequirements.allowedSandboxModes.includes('danger-full-access')
-  )
+  if (preset === 'full-access') {
+    return (
+      props.executionModeRequirements.allowedApprovalPolicies.includes('never') &&
+      props.executionModeRequirements.allowedSandboxModes.includes('danger-full-access')
+    )
+  }
+
+  return false
 }
 
 function onExecutionModePresetChange(event: Event) {
@@ -108,11 +119,14 @@ function getExecutionModePresetLabel(preset: ExecutionModePreset): string {
   if (preset === 'default') {
     return '自動'
   }
-  if (preset === 'full-auto') {
-    return 'full-auto'
+  if (preset === 'read-only') {
+    return 'read-only'
   }
-  if (preset === 'dangerously-bypass') {
-    return 'dangerous'
+  if (preset === 'auto') {
+    return 'auto'
+  }
+  if (preset === 'full-access') {
+    return 'full-access'
   }
   return 'custom'
 }
@@ -120,7 +134,11 @@ function getExecutionModePresetLabel(preset: ExecutionModePreset): string {
 function isSelectableExecutionModePreset(
   preset: ExecutionModePreset,
 ): preset is ExecutionModeSelectablePreset {
-  return preset === 'full-auto' || preset === 'dangerously-bypass'
+  return (
+    preset === 'read-only' ||
+    preset === 'auto' ||
+    preset === 'full-access'
+  )
 }
 
 function getExecutionModeSelectValue(): ExecutionModeSelectablePreset | '' {
@@ -200,7 +218,6 @@ onMounted(async () => {
             </svg>
           </button>
           <button
-            v-else
             class="mb-1 inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-text-primary text-surface transition-colors hover:opacity-80 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus-ring/50 disabled:cursor-not-allowed disabled:opacity-30"
             data-testid="send-turn-button"
             type="submit"

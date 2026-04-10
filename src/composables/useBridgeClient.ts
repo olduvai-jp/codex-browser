@@ -8,6 +8,7 @@ import {
   type ApprovalRequest,
 } from '@/lib/approvalRequests'
 import { describeApprovalMethod, formatDurationMs, formatHistoryUpdatedAt, formatRate, stringifyDetails } from '@/lib/formatters'
+import { INIT_PROMPT_FOR_SLASH_COMMAND } from '@/lib/initPromptForSlashCommand'
 import {
   extractConfigPayload,
   extractThreadFromReadResult,
@@ -27,6 +28,7 @@ import {
   type ApprovalPolicy,
   type ExecutionModeConfig,
   type ExecutionModePreset,
+  type ExecutionModeSelectablePreset,
   type ExecutionModeRequirements,
   type ExecutionModePresetPair,
   type SandboxMode,
@@ -72,10 +74,12 @@ const CODEX_APP_UNTITLED_CONVERSATION_TITLE = 'Untitled conversation'
 const UUID_STRING_PATTERN = /^(?:[0-9a-f]{32}|[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})$/i
 const MAX_TITLE_CANDIDATE_LENGTH = 120
 const DEFAULT_EXECUTION_MODE_PRESET = 'default' as const
-const FULL_AUTO_APPROVAL_POLICY: ApprovalPolicy = 'on-request'
-const FULL_AUTO_SANDBOX_MODE: SandboxMode = 'workspace-write'
-const DANGEROUS_APPROVAL_POLICY: ApprovalPolicy = 'never'
-const DANGEROUS_SANDBOX_MODE: SandboxMode = 'danger-full-access'
+const READ_ONLY_APPROVAL_POLICY: ApprovalPolicy = 'on-request'
+const READ_ONLY_SANDBOX_MODE: SandboxMode = 'read-only'
+const AUTO_APPROVAL_POLICY: ApprovalPolicy = 'on-request'
+const AUTO_SANDBOX_MODE: SandboxMode = 'workspace-write'
+const FULL_ACCESS_APPROVAL_POLICY: ApprovalPolicy = 'never'
+const FULL_ACCESS_SANDBOX_MODE: SandboxMode = 'danger-full-access'
 const QUICK_START_CONNECT_POLL_INTERVAL_MS = 25
 const QUICK_START_CONNECT_WAIT_TIMEOUT_MS = 5_000
 
@@ -93,6 +97,25 @@ type CodexAppHistoryUpsertPayload = {
 type CodexAppOverlayEntry = ThreadHistoryEntry & {
   updatedAt: string
   scopeCwd?: string
+}
+type SlashCommandName = 'model' | 'permissions' | 'approvals' | 'status' | 'diff' | 'clear' | 'init'
+type ParsedSlashCommand = {
+  command: string
+  rawCommand: string
+  args: string[]
+  rawArgs: string
+}
+type TokenUsageBreakdown = {
+  totalTokens: number
+  inputTokens: number
+  cachedInputTokens: number
+  outputTokens: number
+  reasoningOutputTokens: number
+}
+type ThreadTokenUsageSnapshot = {
+  total: TokenUsageBreakdown
+  last: TokenUsageBreakdown
+  modelContextWindow: number | null
 }
 const HISTORY_DISPLAY_MODE_SET = new Set<HistoryDisplayMode>(['native', 'codex-app'])
 
@@ -257,6 +280,48 @@ function parseCodexAppRoots(payload: unknown): CodexAppProjectRootsSnapshot {
     activeRoots,
     savedRoots,
     labels,
+  }
+}
+
+function parseFiniteNumber(value: unknown): number | null {
+  if (typeof value === 'number' && Number.isFinite(value)) {
+    return value
+  }
+  if (typeof value === 'string' && value.trim().length > 0) {
+    const parsed = Number(value)
+    if (Number.isFinite(parsed)) {
+      return parsed
+    }
+  }
+  return null
+}
+
+function parseTokenUsageBreakdown(value: unknown): TokenUsageBreakdown | null {
+  if (!isRecord(value)) {
+    return null
+  }
+
+  const totalTokens = parseFiniteNumber(value.totalTokens)
+  const inputTokens = parseFiniteNumber(value.inputTokens)
+  const cachedInputTokens = parseFiniteNumber(value.cachedInputTokens)
+  const outputTokens = parseFiniteNumber(value.outputTokens)
+  const reasoningOutputTokens = parseFiniteNumber(value.reasoningOutputTokens)
+  if (
+    totalTokens == null ||
+    inputTokens == null ||
+    cachedInputTokens == null ||
+    outputTokens == null ||
+    reasoningOutputTokens == null
+  ) {
+    return null
+  }
+
+  return {
+    totalTokens,
+    inputTokens,
+    cachedInputTokens,
+    outputTokens,
+    reasoningOutputTokens,
   }
 }
 
@@ -427,8 +492,8 @@ function hasResolvedThreadTitle(entry: ThreadHistoryEntry): boolean {
 
 function buildExecutionModeRequirementsDefault(): ExecutionModeRequirements {
   return {
-    allowedApprovalPolicies: [FULL_AUTO_APPROVAL_POLICY],
-    allowedSandboxModes: [FULL_AUTO_SANDBOX_MODE],
+    allowedApprovalPolicies: [AUTO_APPROVAL_POLICY],
+    allowedSandboxModes: [AUTO_SANDBOX_MODE],
   }
 }
 
@@ -456,12 +521,16 @@ function executionModePresetFromValues(
   approvalPolicy: ApprovalPolicy | '' | null,
   sandboxMode: SandboxMode | '' | null,
 ): ExecutionModePreset {
-  if (approvalPolicy === FULL_AUTO_APPROVAL_POLICY && sandboxMode === FULL_AUTO_SANDBOX_MODE) {
-    return 'full-auto'
+  if (approvalPolicy === READ_ONLY_APPROVAL_POLICY && sandboxMode === READ_ONLY_SANDBOX_MODE) {
+    return 'read-only'
   }
 
-  if (approvalPolicy === DANGEROUS_APPROVAL_POLICY && sandboxMode === DANGEROUS_SANDBOX_MODE) {
-    return 'dangerously-bypass'
+  if (approvalPolicy === AUTO_APPROVAL_POLICY && sandboxMode === AUTO_SANDBOX_MODE) {
+    return 'auto'
+  }
+
+  if (approvalPolicy === FULL_ACCESS_APPROVAL_POLICY && sandboxMode === FULL_ACCESS_SANDBOX_MODE) {
+    return 'full-access'
   }
 
   if (!approvalPolicy || !sandboxMode) {
@@ -475,14 +544,21 @@ function resolvePresetValues(preset: ExecutionModePreset): {
   approvalPolicy: ApprovalPolicy
   sandboxMode: SandboxMode
 } | null {
-  if (preset === 'full-auto') {
-    return { approvalPolicy: FULL_AUTO_APPROVAL_POLICY, sandboxMode: FULL_AUTO_SANDBOX_MODE }
+  if (preset === 'read-only') {
+    return { approvalPolicy: READ_ONLY_APPROVAL_POLICY, sandboxMode: READ_ONLY_SANDBOX_MODE }
   }
 
-  if (preset === 'dangerously-bypass') {
+  if (preset === 'auto') {
     return {
-      approvalPolicy: DANGEROUS_APPROVAL_POLICY,
-      sandboxMode: DANGEROUS_SANDBOX_MODE,
+      approvalPolicy: AUTO_APPROVAL_POLICY,
+      sandboxMode: AUTO_SANDBOX_MODE,
+    }
+  }
+
+  if (preset === 'full-access') {
+    return {
+      approvalPolicy: FULL_ACCESS_APPROVAL_POLICY,
+      sandboxMode: FULL_ACCESS_SANDBOX_MODE,
     }
   }
 
@@ -491,6 +567,66 @@ function resolvePresetValues(preset: ExecutionModePreset): {
 
 function isExecutionModePreset(value: string): value is ExecutionModePreset {
   return EXECUTION_MODE_PRESET_VALUES.includes(value as ExecutionModePreset)
+}
+
+const SLASH_COMMAND_NAMES = new Set<SlashCommandName>([
+  'model',
+  'permissions',
+  'approvals',
+  'status',
+  'diff',
+  'clear',
+  'init',
+])
+const SLASH_COMMAND_BLOCKED_DURING_TURN = new Set<SlashCommandName>([
+  'model',
+  'permissions',
+  'approvals',
+  'clear',
+  'init',
+])
+const EXECUTION_MODE_COMMAND_PRESET_VALUES: ExecutionModeSelectablePreset[] = [
+  'read-only',
+  'auto',
+  'full-access',
+]
+
+function isExecutionModeSelectablePreset(value: ExecutionModePreset): value is ExecutionModeSelectablePreset {
+  return EXECUTION_MODE_COMMAND_PRESET_VALUES.includes(value as ExecutionModeSelectablePreset)
+}
+
+function isExecutionModeSelectablePresetValue(value: string): value is ExecutionModeSelectablePreset {
+  return EXECUTION_MODE_COMMAND_PRESET_VALUES.includes(value as ExecutionModeSelectablePreset)
+}
+
+function isSlashCommandName(value: string): value is SlashCommandName {
+  return SLASH_COMMAND_NAMES.has(value as SlashCommandName)
+}
+
+function parseSlashCommandInput(text: string): ParsedSlashCommand | null {
+  const trimmed = text.trim()
+  if (!trimmed.startsWith('/')) {
+    return null
+  }
+
+  const body = trimmed.slice(1).trim()
+  if (body.length === 0) {
+    return {
+      command: '',
+      rawCommand: '',
+      args: [],
+      rawArgs: '',
+    }
+  }
+
+  const [rawCommand = '', ...rest] = body.split(/\s+/)
+  const rawArgs = rest.join(' ').trim()
+  return {
+    command: rawCommand.toLowerCase(),
+    rawCommand,
+    args: rawArgs.length > 0 ? rawArgs.split(/\s+/) : [],
+    rawArgs,
+  }
 }
 
 function isExecutionModePresetAllowed(
@@ -778,6 +914,8 @@ export function useBridgeClient() {
   const executionModeRequirements = ref<ExecutionModeRequirements>(buildExecutionModeRequirementsDefault())
   const executionModeConfigVersion = ref<string>('')
   const isExecutionModeSaving = ref(false)
+  const isSlashModelPickerOpen = ref(false)
+  const isSlashPermissionsPickerOpen = ref(false)
   const quickStartInProgress = ref(false)
   const userGuidance = ref<UserGuidance | null>(null)
   const bridgeCwd = ref('')
@@ -822,6 +960,8 @@ export function useBridgeClient() {
   const toolUserInputTimelineEntryIdByRequestKey = new Map<string, string>()
   const toolCallEntryIdByLookupKey = new Map<string, string>()
   const codexAppPendingFirstTurnHistoryUpsertOverlayByThreadId = new Map<string, CodexAppOverlayEntry>()
+  const tokenUsageByThreadId = new Map<string, ThreadTokenUsageSnapshot>()
+  const turnDiffByTurnId = new Map<string, string>()
 
   let uiMessageSequence = 1
   let logSequence = 1
@@ -895,22 +1035,33 @@ export function useBridgeClient() {
   // Computed
   const isConnected = computed(() => connectionState.value === 'connected')
   const isTurnActive = computed(() => turnStatus.value === 'inProgress')
+  const pendingSlashCommand = computed(() => parseSlashCommandInput(messageInput.value))
   const canStartThread = computed(() => isConnected.value && initialized.value)
   const canResumeThread = computed(
     () => isConnected.value && initialized.value && resumeThreadId.value.trim().length > 0,
   )
-  const canSendMessage = computed(
-    () =>
-      isConnected.value &&
-      initialized.value &&
+  const canSendMessage = computed(() => {
+    if (!isConnected.value || !initialized.value) {
+      return false
+    }
+
+    if (messageInput.value.trim().length === 0) {
+      return false
+    }
+
+    if (pendingSlashCommand.value) {
+      return true
+    }
+
+    return (
       activeThreadId.value.trim().length > 0 &&
       !(
         readPreviewThreadId.value.trim().length > 0 &&
         readPreviewThreadId.value.trim() !== activeThreadId.value.trim()
       ) &&
-      messageInput.value.trim().length > 0 &&
-      !isTurnActive.value,
-  )
+      !isTurnActive.value
+    )
+  })
   const canInterruptTurn = computed(
     () =>
       isConnected.value &&
@@ -1058,6 +1209,9 @@ export function useBridgeClient() {
     }
     if (!initialized.value) {
       return '初期化が完了していません。'
+    }
+    if (pendingSlashCommand.value) {
+      return ''
     }
     if (activeThreadId.value.trim().length === 0) {
       return '先に会話を開始または再開してください。'
@@ -1865,6 +2019,7 @@ function parseToolUserInputQuestions(params: Record<string, unknown>): ToolUserI
     assistantAnswerByItemId.clear()
     reasoningSummaryByTurnId.clear()
     reasoningTurnIdByItemId.clear()
+    turnDiffByTurnId.clear()
     clearToolCalls()
     turnStatusTimeline.value = []
     approvals.value = []
@@ -1877,6 +2032,8 @@ function parseToolUserInputQuestions(params: Record<string, unknown>): ToolUserI
     readPreviewThreadId.value = ''
     currentTurnId.value = ''
     turnStatus.value = 'idle'
+    isSlashModelPickerOpen.value = false
+    isSlashPermissionsPickerOpen.value = false
   }
 
   function addMessage(message: UiMessage): void {
@@ -1889,6 +2046,84 @@ function parseToolUserInputQuestions(params: Record<string, unknown>): ToolUserI
     messages.value.push(message)
     if (message.itemId && message.role === 'assistant') {
       assistantMessageIndexByItemId.set(message.itemId, messages.value.length - 1)
+    }
+  }
+
+  function addSystemMessage(text: string): void {
+    addMessage({
+      id: makeUiMessageId('system'),
+      role: 'system',
+      text,
+      assistantUtteranceStarted: false,
+      turnId: currentTurnId.value || undefined,
+    })
+  }
+
+  function formatTokenUsageBreakdown(label: string, usage: TokenUsageBreakdown): string {
+    return `${label}: total=${usage.totalTokens}, input=${usage.inputTokens}, cached=${usage.cachedInputTokens}, output=${usage.outputTokens}, reasoning=${usage.reasoningOutputTokens}`
+  }
+
+  function formatStatusOutput(): string {
+    const threadId = activeThreadId.value.trim()
+    const currentModel = selectedModelId.value.trim()
+    const effort = selectedThinkingEffort.value.trim()
+    const preset = executionModeCurrentPreset.value
+    const approvalPolicy = executionModeConfig.value.approvalPolicy || '(unset)'
+    const sandboxMode = executionModeConfig.value.sandboxMode || '(unset)'
+    const usage = threadId.length > 0 ? tokenUsageByThreadId.get(threadId) ?? null : null
+
+    const lines = [
+      '`/status`',
+      `thread: ${threadId.length > 0 ? threadId : '(none)'}`,
+      `turn: ${currentTurnId.value.trim().length > 0 ? currentTurnId.value.trim() : '(none)'} (${turnStatus.value})`,
+      `model: ${currentModel.length > 0 ? currentModel : '(auto)'}`,
+      `reasoning effort: ${effort.length > 0 ? effort : '(auto)'}`,
+      `permissions preset: ${preset}`,
+      `approval_policy: ${approvalPolicy}`,
+      `sandbox_mode: ${sandboxMode}`,
+    ]
+
+    if (!usage) {
+      lines.push('token usage: (not yet received)')
+    } else {
+      lines.push(formatTokenUsageBreakdown('tokens(last)', usage.last))
+      lines.push(formatTokenUsageBreakdown('tokens(total)', usage.total))
+      lines.push(
+        `model context window: ${usage.modelContextWindow == null ? '(unknown)' : usage.modelContextWindow}`,
+      )
+    }
+
+    return lines.join('\n')
+  }
+
+  function parseThreadTokenUsageSnapshot(
+    params: Record<string, unknown>,
+  ): { threadId: string; turnId: string | null; snapshot: ThreadTokenUsageSnapshot } | null {
+    const threadId = pickStringValue(params, ['threadId', 'thread_id']) ?? ''
+    if (threadId.length === 0) {
+      return null
+    }
+
+    const tokenUsage = isRecord(params.tokenUsage) ? params.tokenUsage : null
+    if (!tokenUsage) {
+      return null
+    }
+
+    const total = parseTokenUsageBreakdown(tokenUsage.total)
+    const last = parseTokenUsageBreakdown(tokenUsage.last)
+    if (!total || !last) {
+      return null
+    }
+
+    const modelContextWindow = parseFiniteNumber(tokenUsage.modelContextWindow)
+    return {
+      threadId,
+      turnId: pickStringValue(params, ['turnId', 'turn_id']),
+      snapshot: {
+        total,
+        last,
+        modelContextWindow,
+      },
     }
   }
 
@@ -2287,6 +2522,41 @@ function parseToolUserInputQuestions(params: Record<string, unknown>): ToolUserI
       return
     }
 
+    if (method === 'thread/tokenUsage/updated' && isRecord(params)) {
+      const parsed = parseThreadTokenUsageSnapshot(params)
+      if (!parsed) {
+        pushLog('rpc', 'warn', 'thread/tokenUsage/updated missing tokenUsage payload', params)
+        return
+      }
+
+      tokenUsageByThreadId.set(parsed.threadId, parsed.snapshot)
+      pushLog('rpc', 'info', `thread/tokenUsage/updated received: ${parsed.threadId}`, {
+        turnId: parsed.turnId,
+        modelContextWindow: parsed.snapshot.modelContextWindow,
+      })
+      return
+    }
+
+    if (method === 'turn/diff/updated' && isRecord(params)) {
+      const turnId = pickStringValue(params, ['turnId', 'turn_id']) ?? ''
+      const rawDiff = params.diff
+      let diffText = ''
+      if (typeof rawDiff === 'string') {
+        diffText = rawDiff
+      } else if (isRecord(rawDiff)) {
+        diffText = pickStringValue(rawDiff, ['unifiedDiff', 'unified_diff', 'diff', 'text'], {
+          trim: false,
+        }) ?? ''
+      }
+      if (turnId.length > 0 && diffText.length > 0) {
+        turnDiffByTurnId.set(turnId, diffText)
+      }
+      pushLog('rpc', 'info', `turn/diff/updated received: ${turnId || '(unknown)'}`, {
+        hasDiff: diffText.length > 0,
+      })
+      return
+    }
+
     if (method === 'item/started' && isRecord(params) && isRecord(params.item)) {
       const item = params.item
       const turnId = pickStringValue(params, ['turnId']) ?? undefined
@@ -2523,6 +2793,8 @@ function parseToolUserInputQuestions(params: Record<string, unknown>): ToolUserI
     executionModeConfig.value = { approvalPolicy: '', sandboxMode: '' }
     executionModeCurrentPreset.value = DEFAULT_EXECUTION_MODE_PRESET
     selectedExecutionModePreset.value = DEFAULT_EXECUTION_MODE_PRESET
+    tokenUsageByThreadId.clear()
+    turnDiffByTurnId.clear()
     executionModeRequirements.value = buildExecutionModeRequirementsDefault()
     executionModeConfigVersion.value = ''
     isExecutionModeSaving.value = false
@@ -3038,13 +3310,424 @@ function parseToolUserInputQuestions(params: Record<string, unknown>): ToolUserI
     }
   }
 
+  function buildTurnStartPayload(threadId: string, text: string): Record<string, unknown> {
+    const payload: Record<string, unknown> = {
+      threadId,
+      input: [
+        {
+          type: 'text',
+          text,
+          text_elements: [],
+        },
+      ],
+    }
+    const modelId = selectedModelId.value.trim()
+    turnStartCount.value += 1
+    if (modelId.length > 0) {
+      turnStartWithModelCount.value += 1
+      payload.model = modelId
+    }
+    if (selectedThinkingEffort.value.length > 0) {
+      payload.effort = selectedThinkingEffort.value
+    }
+
+    return payload
+  }
+
+  async function applyTurnStartResponse(
+    response: unknown,
+    threadId: string,
+    titleCandidate: string | null,
+  ): Promise<string | null> {
+    applyExecutionModeStateFromPair(
+      normalizeExecutionModeFromConfigPayload(response),
+      {
+        executionModeConfig,
+        executionModeCurrentPreset: executionModeCurrentPreset,
+        selectedExecutionModePreset: selectedExecutionModePreset,
+      },
+    )
+    const responseVersion = parseConfigVersion(response)
+    if (responseVersion) {
+      executionModeConfigVersion.value = responseVersion
+    }
+    if (titleCandidate) {
+      cacheThreadTitleOverride(threadId, titleCandidate)
+    }
+
+    if (!isRecord(response) || !isRecord(response.turn) || typeof response.turn.id !== 'string') {
+      pushLog('rpc', 'warn', 'turn/start response missing turn.id', response)
+      setUserGuidance('warn', '送信は受け付けられましたが、ターンIDを確認できませんでした。ログを確認してください。')
+      return null
+    }
+
+    currentTurnId.value = response.turn.id
+    if (
+      isCodexAppHistoryMode.value &&
+      codexAppPendingFirstTurnHistoryUpsertOverlayByThreadId.has(threadId)
+    ) {
+      const pendingOverlayEntry = codexAppPendingFirstTurnHistoryUpsertOverlayByThreadId.get(threadId)
+      const fallbackBridgeCwd = bridgeCwd.value.trim()
+      const historyCwd = pendingOverlayEntry?.scopeCwd
+        ?? (fallbackBridgeCwd.length > 0 ? fallbackBridgeCwd : undefined)
+      const workspaceRootHint = resolveCodexAppWorkspaceRootHint(historyCwd)
+      const resolvedTitle =
+        resolveTitleCandidateFromUserMessage(titleCandidate ?? '') ?? CODEX_APP_UNTITLED_CONVERSATION_TITLE
+      const updatedOverlayEntry: CodexAppOverlayEntry = {
+        id: threadId,
+        title: resolvedTitle,
+        updatedAt: new Date().toISOString(),
+        cwd: historyCwd,
+        workspaceRoot: workspaceRootHint,
+        workspaceLabel:
+          (workspaceRootHint
+            ? (codexAppRoots.value.labels[workspaceRootHint]?.trim() ?? workspaceRootHint.split('/').filter(Boolean).pop())
+            : (historyCwd?.split('/').filter(Boolean).pop())) || UNKNOWN_WORKSPACE_LABEL,
+        source: 'codex-app',
+        scopeCwd: historyCwd,
+      }
+      upsertCodexAppHistoryOverlayEntry(updatedOverlayEntry)
+      codexAppPendingFirstTurnHistoryUpsertOverlayByThreadId.delete(threadId)
+      await upsertCodexAppHistoryEntry({
+        threadId,
+        title: updatedOverlayEntry.title,
+        updatedAt: updatedOverlayEntry.updatedAt,
+        workspaceRootHint,
+      })
+    }
+    pushLog('rpc', 'info', `turn/start accepted: ${response.turn.id}`)
+    clearUserGuidance()
+    return response.turn.id
+  }
+
+  function buildSlashCommandUsageMessage(command: SlashCommandName): string {
+    if (command === 'model') {
+      return 'Usage: /model <model-id> [none|minimal|low|medium|high|xhigh]'
+    }
+    if (command === 'permissions' || command === 'approvals') {
+      return 'Usage: /permissions <read-only|auto|full-access>'
+    }
+    return `Unsupported command usage: /${command}`
+  }
+
+  function isSlashCommandAvailableDuringTurn(command: SlashCommandName): boolean {
+    return !SLASH_COMMAND_BLOCKED_DURING_TURN.has(command)
+  }
+
+  async function openSlashModelPicker(): Promise<void> {
+    if (modelOptions.value.length === 0) {
+      await loadModelList()
+    }
+    isSlashModelPickerOpen.value = true
+  }
+
+  function closeSlashModelPicker(): void {
+    isSlashModelPickerOpen.value = false
+  }
+
+  function selectSlashModelFromPicker(modelId: string): void {
+    const normalizedModelId = modelId.trim()
+    if (normalizedModelId.length === 0 || !getModelOption(normalizedModelId)) {
+      addSystemMessage(`Error: unknown model '${normalizedModelId}'.`)
+      return
+    }
+
+    setSelectedModelId(normalizedModelId)
+    setSelectedThinkingEffort('')
+    isSlashModelPickerOpen.value = false
+    addSystemMessage(`Model updated: ${normalizedModelId} (effort=auto)`)
+  }
+
+  function openSlashPermissionsPicker(): void {
+    isSlashPermissionsPickerOpen.value = true
+  }
+
+  function closeSlashPermissionsPicker(): void {
+    isSlashPermissionsPickerOpen.value = false
+  }
+
+  async function selectSlashPermissionsPresetFromPicker(preset: string): Promise<void> {
+    const normalizedPreset = preset.trim().toLowerCase()
+    if (!isExecutionModeSelectablePresetValue(normalizedPreset)) {
+      addSystemMessage(`Error: invalid permissions preset '${preset}'. ${buildSlashCommandUsageMessage('permissions')}`)
+      return
+    }
+
+    const saveResult = await persistExecutionModePreset(normalizedPreset)
+    if (!saveResult.ok) {
+      addSystemMessage(`Error: ${saveResult.message}`)
+      return
+    }
+
+    isSlashPermissionsPickerOpen.value = false
+    addSystemMessage(`Permissions updated: ${normalizedPreset}`)
+  }
+
+  async function handleSlashModelCommand(args: string[]): Promise<void> {
+    if (args.length === 0) {
+      await openSlashModelPicker()
+      return
+    }
+
+    if (args.length > 2) {
+      addSystemMessage(`Error: ${buildSlashCommandUsageMessage('model')}`)
+      return
+    }
+
+    const modelId = args[0]?.trim() ?? ''
+    const modelOption = getModelOption(modelId)
+    if (modelId.length === 0 || !modelOption) {
+      addSystemMessage(`Error: unknown model '${modelId}'.`)
+      return
+    }
+
+    if (args.length === 2) {
+      const effort = args[1]?.trim().toLowerCase() ?? ''
+      if (!isReasoningEffort(effort)) {
+        addSystemMessage(`Error: invalid effort '${args[1]}'. ${buildSlashCommandUsageMessage('model')}`)
+        return
+      }
+      const supportedEfforts = getSupportedThinkingEfforts(modelId)
+      if (!supportedEfforts.includes(effort)) {
+        addSystemMessage(`Error: effort '${effort}' is not supported by model '${modelId}'.`)
+        return
+      }
+      setSelectedModelId(modelId)
+      setSelectedThinkingEffort(effort)
+      addSystemMessage(`Model updated: ${modelId} (effort=${effort})`)
+      return
+    }
+
+    setSelectedModelId(modelId)
+    setSelectedThinkingEffort('')
+    addSystemMessage(`Model updated: ${modelId} (effort=auto)`)
+  }
+
+  async function handleSlashPermissionsCommand(args: string[], originalCommand: SlashCommandName): Promise<void> {
+    if (args.length === 0) {
+      if (originalCommand === 'approvals') {
+        addSystemMessage('/approvals is an alias of /permissions.')
+      }
+      openSlashPermissionsPicker()
+      return
+    }
+    if (args.length !== 1) {
+      addSystemMessage(`Error: ${buildSlashCommandUsageMessage('permissions')}`)
+      return
+    }
+
+    const presetArg = args[0]?.trim().toLowerCase() ?? ''
+    if (!isExecutionModeSelectablePresetValue(presetArg)) {
+      addSystemMessage(`Error: invalid permissions preset '${presetArg}'. ${buildSlashCommandUsageMessage('permissions')}`)
+      return
+    }
+
+    const saveResult = await persistExecutionModePreset(presetArg)
+    if (!saveResult.ok) {
+      addSystemMessage(`Error: ${saveResult.message}`)
+      return
+    }
+    addSystemMessage(`Permissions updated: ${presetArg}`)
+  }
+
+  async function handleSlashStatusCommand(): Promise<void> {
+    addSystemMessage(formatStatusOutput())
+  }
+
+  async function handleSlashDiffCommand(): Promise<void> {
+    const resolvedCwd = bridgeCwd.value.trim()
+    const query = resolvedCwd.length > 0 ? `?cwd=${encodeURIComponent(resolvedCwd)}` : ''
+
+    try {
+      const response = await fetch(`/api/slash/diff${query}`, {
+        method: 'GET',
+        headers: {
+          accept: 'application/json',
+        },
+      })
+      const payload = await response.json() as {
+        text?: unknown
+        error?: unknown
+      }
+      if (!response.ok) {
+        const errorMessage =
+          typeof payload.error === 'string'
+            ? payload.error
+            : `HTTP ${response.status}`
+        addSystemMessage(`Error: /diff failed: ${errorMessage}`)
+        return
+      }
+
+      const diffText = typeof payload.text === 'string' ? payload.text : ''
+      if (diffText.length > 0) {
+        addSystemMessage(diffText)
+        return
+      }
+
+      const fallbackTurnDiff = turnDiffByTurnId.get(currentTurnId.value.trim() || '') ?? ''
+      if (fallbackTurnDiff.length > 0) {
+        addSystemMessage(fallbackTurnDiff)
+        return
+      }
+      addSystemMessage('`/diff` returned no output.')
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error)
+      addSystemMessage(`Error: /diff failed: ${message}`)
+    }
+  }
+
+  async function handleSlashClearCommand(): Promise<void> {
+    const preferredCwd = bridgeCwd.value.trim()
+    resetConversation()
+    activeThreadId.value = ''
+    resumeThreadId.value = ''
+    selectedHistoryThreadId.value = ''
+    await startThread(preferredCwd.length > 0 ? preferredCwd : undefined)
+    const nextThreadId = activeThreadId.value.trim()
+    if (nextThreadId.length > 0) {
+      addSystemMessage(`Started a new conversation: ${nextThreadId}`)
+      return
+    }
+    addSystemMessage('Error: failed to start a new conversation for `/clear`.')
+  }
+
+  async function handleSlashInitCommand(): Promise<void> {
+    if (!client.value || !isConnected.value || !initialized.value) {
+      addSystemMessage('Error: `/init` is unavailable before bridge initialization.')
+      return
+    }
+
+    if (activeThreadId.value.trim().length === 0) {
+      const preferredCwd = bridgeCwd.value.trim()
+      await startThread(preferredCwd.length > 0 ? preferredCwd : undefined)
+      if (activeThreadId.value.trim().length === 0) {
+        addSystemMessage('Error: `/init` requires an active conversation thread.')
+        return
+      }
+    }
+
+    const resolvedCwd = bridgeCwd.value.trim()
+    const query = resolvedCwd.length > 0 ? `?cwd=${encodeURIComponent(resolvedCwd)}` : ''
+    try {
+      const statusResponse = await fetch(`/api/slash/init-status${query}`, {
+        method: 'GET',
+        headers: {
+          accept: 'application/json',
+        },
+      })
+      const statusPayload = await statusResponse.json() as {
+        exists?: unknown
+        agentsPath?: unknown
+        error?: unknown
+      }
+      if (!statusResponse.ok) {
+        const errorMessage =
+          typeof statusPayload.error === 'string'
+            ? statusPayload.error
+            : `HTTP ${statusResponse.status}`
+        addSystemMessage(`Error: /init status check failed: ${errorMessage}`)
+        return
+      }
+
+      const exists = statusPayload.exists === true
+      const agentsPath =
+        typeof statusPayload.agentsPath === 'string'
+          ? statusPayload.agentsPath
+          : 'AGENTS.md'
+      if (exists) {
+        addSystemMessage(`${agentsPath} already exists. Skipping /init to avoid overwriting it.`)
+        return
+      }
+
+      const threadId = activeThreadId.value.trim()
+      if (threadId.length === 0) {
+        addSystemMessage('Error: `/init` requires an active conversation thread.')
+        return
+      }
+
+      turnStatus.value = 'inProgress'
+      if (firstSendDurationMs.value === null) {
+        firstSendDurationMs.value = Math.max(0, Date.now() - appStartedAtMs)
+      }
+      const payload = buildTurnStartPayload(threadId, INIT_PROMPT_FOR_SLASH_COMMAND)
+      const response = await client.value.request('turn/start', payload)
+      const startedTurnId = await applyTurnStartResponse(response, threadId, null)
+      if (!startedTurnId) {
+        turnStatus.value = 'failed'
+      }
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error)
+      turnStatus.value = 'failed'
+      pushTurnStatusTimeline('failed', `Turn start failed: ${message}`, currentTurnId.value || undefined)
+      addSystemMessage(`Error: /init failed: ${message}`)
+    }
+  }
+
+  async function dispatchSlashCommand(text: string): Promise<boolean> {
+    const parsed = parseSlashCommandInput(text)
+    if (!parsed) {
+      return false
+    }
+
+    messageInput.value = ''
+    if (!isSlashCommandName(parsed.command)) {
+      const commandLabel = parsed.rawCommand.length > 0 ? parsed.rawCommand : '/'
+      addSystemMessage(`Error: unknown slash command '/${commandLabel}'.`)
+      return true
+    }
+
+    if (isTurnActive.value && !isSlashCommandAvailableDuringTurn(parsed.command)) {
+      addSystemMessage(`Error: '/${parsed.command}' is disabled while a turn is in progress.`)
+      return true
+    }
+
+    if (parsed.command === 'model') {
+      await handleSlashModelCommand(parsed.args)
+      return true
+    }
+    if (parsed.command === 'permissions' || parsed.command === 'approvals') {
+      await handleSlashPermissionsCommand(parsed.args, parsed.command)
+      return true
+    }
+    if (parsed.command === 'status') {
+      await handleSlashStatusCommand()
+      return true
+    }
+    if (parsed.command === 'diff') {
+      await handleSlashDiffCommand()
+      return true
+    }
+    if (parsed.command === 'clear') {
+      await handleSlashClearCommand()
+      return true
+    }
+    if (parsed.command === 'init') {
+      await handleSlashInitCommand()
+      return true
+    }
+
+    addSystemMessage(`Error: unsupported slash command '/${parsed.command}'.`)
+    return true
+  }
+
   async function sendTurn(): Promise<void> {
     if (!client.value || !canSendMessage.value) {
       return
     }
 
     const text = messageInput.value.trim()
+    if (text.length === 0) {
+      return
+    }
+    if (await dispatchSlashCommand(text)) {
+      return
+    }
+
     const threadId = activeThreadId.value.trim()
+    if (threadId.length === 0) {
+      setUserGuidance('warn', '先に会話を開始または再開してください。')
+      return
+    }
     messageInput.value = ''
     const optimisticMessageId = makeUiMessageId('user')
 
@@ -3062,82 +3745,14 @@ function parseToolUserInputQuestions(params: Record<string, unknown>): ToolUserI
       if (firstSendDurationMs.value === null) {
         firstSendDurationMs.value = Math.max(0, Date.now() - appStartedAtMs)
       }
-      const payload: Record<string, unknown> = {
-        threadId,
-        input: [
-          {
-            type: 'text',
-            text,
-            text_elements: [],
-          },
-        ],
-      }
-      const modelId = selectedModelId.value.trim()
-      turnStartCount.value += 1
-      if (modelId.length > 0) {
-        turnStartWithModelCount.value += 1
-        payload.model = modelId
-      }
-      if (selectedThinkingEffort.value.length > 0) {
-        payload.effort = selectedThinkingEffort.value
-      }
-
+      const payload = buildTurnStartPayload(threadId, text)
       const response = await client.value.request('turn/start', payload)
-      applyExecutionModeStateFromPair(
-        normalizeExecutionModeFromConfigPayload(response),
-        {
-          executionModeConfig,
-          executionModeCurrentPreset: executionModeCurrentPreset,
-          selectedExecutionModePreset: selectedExecutionModePreset,
-        },
-      )
-      const responseVersion = parseConfigVersion(response)
-      if (responseVersion) {
-        executionModeConfigVersion.value = responseVersion
-      }
-      cacheThreadTitleOverride(threadId, text)
-
-      if (isRecord(response) && isRecord(response.turn) && typeof response.turn.id === 'string') {
-        currentTurnId.value = response.turn.id
-        if (
-          isCodexAppHistoryMode.value &&
-          codexAppPendingFirstTurnHistoryUpsertOverlayByThreadId.has(threadId)
-        ) {
-          const pendingOverlayEntry = codexAppPendingFirstTurnHistoryUpsertOverlayByThreadId.get(threadId)
-          const fallbackBridgeCwd = bridgeCwd.value.trim()
-          const historyCwd = pendingOverlayEntry?.scopeCwd
-            ?? (fallbackBridgeCwd.length > 0 ? fallbackBridgeCwd : undefined)
-          const workspaceRootHint = resolveCodexAppWorkspaceRootHint(historyCwd)
-          const resolvedTitle = resolveTitleCandidateFromUserMessage(text) ?? CODEX_APP_UNTITLED_CONVERSATION_TITLE
-          const updatedOverlayEntry: CodexAppOverlayEntry = {
-            id: threadId,
-            title: resolvedTitle,
-            updatedAt: new Date().toISOString(),
-            cwd: historyCwd,
-            workspaceRoot: workspaceRootHint,
-            workspaceLabel:
-              (workspaceRootHint
-                ? (codexAppRoots.value.labels[workspaceRootHint]?.trim() ?? workspaceRootHint.split('/').filter(Boolean).pop())
-                : (historyCwd?.split('/').filter(Boolean).pop())) || UNKNOWN_WORKSPACE_LABEL,
-            source: 'codex-app',
-            scopeCwd: historyCwd,
-          }
-          upsertCodexAppHistoryOverlayEntry(updatedOverlayEntry)
-          codexAppPendingFirstTurnHistoryUpsertOverlayByThreadId.delete(threadId)
-          await upsertCodexAppHistoryEntry({
-            threadId,
-            title: updatedOverlayEntry.title,
-            updatedAt: updatedOverlayEntry.updatedAt,
-            workspaceRootHint,
-          })
-        }
-        pushLog('rpc', 'info', `turn/start accepted: ${response.turn.id}`)
-        clearUserGuidance()
+      const startedTurnId = await applyTurnStartResponse(response, threadId, text)
+      if (startedTurnId) {
         return
       }
-
-      pushLog('rpc', 'warn', 'turn/start response missing turn.id', response)
-      setUserGuidance('warn', '送信は受け付けられましたが、ターンIDを確認できませんでした。ログを確認してください。')
+      turnStatus.value = 'failed'
+      pushTurnStatusTimeline('failed', 'Turn start failed: missing turn.id', currentTurnId.value || undefined)
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error)
       messages.value = messages.value.filter((entry) => entry.id !== optimisticMessageId)
@@ -3295,21 +3910,22 @@ function parseToolUserInputQuestions(params: Record<string, unknown>): ToolUserI
     selectedExecutionModePreset.value = value
   }
 
-  async function saveExecutionModeConfig(): Promise<void> {
+  async function persistExecutionModePreset(
+    preset: ExecutionModeSelectablePreset,
+  ): Promise<{ ok: true } | { ok: false; message: string }> {
     if (!client.value || !isConnected.value || !initialized.value) {
-      return
+      return { ok: false, message: 'bridge is not ready' }
     }
     if (isExecutionModeSaving.value) {
-      return
+      return { ok: false, message: 'execution mode is currently being saved' }
+    }
+    if (!isExecutionModePresetAllowed(preset, executionModeRequirements.value)) {
+      return { ok: false, message: 'selected preset is blocked by config requirements' }
     }
 
-    const presetValues = executionModePayloadFromPreset(selectedExecutionModePreset.value)
+    const presetValues = executionModePayloadFromPreset(preset)
     if (!presetValues) {
-      return
-    }
-    if (!isExecutionModePresetAllowed(selectedExecutionModePreset.value, executionModeRequirements.value)) {
-      setUserGuidance('warn', '選択された実行モードは制約により保存できません。')
-      return
+      return { ok: false, message: `unknown preset: ${preset}` }
     }
 
     isExecutionModeSaving.value = true
@@ -3340,13 +3956,34 @@ function parseToolUserInputQuestions(params: Record<string, unknown>): ToolUserI
       }
       pushLog('rpc', 'info', 'config/batchWrite completed', response)
       await loadConfig()
-      executionModeCurrentPreset.value = selectedExecutionModePreset.value
+      executionModeCurrentPreset.value = preset
+      selectedExecutionModePreset.value = preset
+      return { ok: true }
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error)
       pushLog('rpc', 'error', `config/batchWrite failed: ${message}`)
-      setUserGuidance('error', `実行モード保存に失敗しました: ${message}`)
+      return { ok: false, message }
     } finally {
       isExecutionModeSaving.value = false
+    }
+  }
+
+  async function saveExecutionModeConfig(): Promise<void> {
+    if (!client.value || !isConnected.value || !initialized.value) {
+      return
+    }
+    if (!isExecutionModeSelectablePreset(selectedExecutionModePreset.value)) {
+      return
+    }
+
+    if (!isExecutionModePresetAllowed(selectedExecutionModePreset.value, executionModeRequirements.value)) {
+      setUserGuidance('warn', '選択された実行モードは制約により保存できません。')
+      return
+    }
+
+    const result = await persistExecutionModePreset(selectedExecutionModePreset.value)
+    if (!result.ok) {
+      setUserGuidance('error', `実行モード保存に失敗しました: ${result.message}`)
     }
   }
 
@@ -3507,6 +4144,8 @@ function parseToolUserInputQuestions(params: Record<string, unknown>): ToolUserI
     executionModeRequirements,
     executionModeConfigVersion,
     isExecutionModeSaving,
+    isSlashModelPickerOpen,
+    isSlashPermissionsPickerOpen,
     quickStartInProgress,
     userGuidance,
     historyDisplayMode,
@@ -3566,6 +4205,12 @@ function parseToolUserInputQuestions(params: Record<string, unknown>): ToolUserI
     loadConfig,
     setSelectedExecutionModePreset,
     saveExecutionModeConfig,
+    openSlashModelPicker,
+    closeSlashModelPicker,
+    selectSlashModelFromPicker,
+    openSlashPermissionsPicker,
+    closeSlashPermissionsPicker,
+    selectSlashPermissionsPresetFromPicker,
     respondToToolUserInput,
     cancelToolUserInputRequest,
     respondToApproval,

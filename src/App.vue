@@ -9,7 +9,9 @@ import AdvancedPanel from './components/advanced/AdvancedPanel.vue'
 import ApprovalModal from './components/approval/ApprovalModal.vue'
 import ToolUserInputModal from './components/tool/ToolUserInputModal.vue'
 import WorkspacePicker from './components/workspace/WorkspacePicker.vue'
+import SlashCommandPickerModal from './components/slash/SlashCommandPickerModal.vue'
 import { logoutBrowserAuth, readBrowserAuthSession } from './lib/browserAuth'
+import { EXECUTION_MODE_SELECTABLE_PRESET_VALUES, type ExecutionModeSelectablePreset } from './types'
 
 const {
   resolvedWsUrl,
@@ -36,6 +38,8 @@ const {
   selectedExecutionModePreset,
   executionModeRequirements,
   isExecutionModeSaving,
+  isSlashModelPickerOpen,
+  isSlashPermissionsPickerOpen,
   toolUserInputRequests,
   approvals,
   timelineItems,
@@ -75,6 +79,10 @@ const {
   setSelectedThinkingEffort,
   setSelectedExecutionModePreset,
   saveExecutionModeConfig,
+  closeSlashModelPicker,
+  selectSlashModelFromPicker,
+  closeSlashPermissionsPicker,
+  selectSlashPermissionsPresetFromPicker,
   loadConfig,
   respondToToolUserInput,
   cancelToolUserInputRequest,
@@ -92,6 +100,51 @@ const currentModelLabel = computed(() => {
   const option = modelOptions.value.find((o) => o.id === selectedModelId.value)
   return option?.label ?? selectedModelId.value
 })
+
+const slashModelPickerOptions = computed(() =>
+  modelOptions.value.map((option) => ({
+    id: option.id,
+    label: option.label,
+    description:
+      option.supportedReasoningEfforts && option.supportedReasoningEfforts.length > 0
+        ? `effort: ${option.supportedReasoningEfforts.join(', ')}`
+        : undefined,
+  })),
+)
+
+function isSlashPermissionPresetAllowed(preset: ExecutionModeSelectablePreset): boolean {
+  if (preset === 'read-only') {
+    return (
+      executionModeRequirements.value.allowedApprovalPolicies.includes('on-request') &&
+      executionModeRequirements.value.allowedSandboxModes.includes('read-only')
+    )
+  }
+  if (preset === 'auto') {
+    return (
+      executionModeRequirements.value.allowedApprovalPolicies.includes('on-request') &&
+      executionModeRequirements.value.allowedSandboxModes.includes('workspace-write')
+    )
+  }
+
+  return (
+    executionModeRequirements.value.allowedApprovalPolicies.includes('never') &&
+    executionModeRequirements.value.allowedSandboxModes.includes('danger-full-access')
+  )
+}
+
+const slashPermissionPickerOptions = computed(() =>
+  EXECUTION_MODE_SELECTABLE_PRESET_VALUES.map((preset) => ({
+    id: preset,
+    label: preset,
+    description:
+      preset === 'read-only'
+        ? 'on-request + read-only'
+        : preset === 'auto'
+          ? 'on-request + workspace-write'
+          : 'never + danger-full-access',
+    disabled: !isSlashPermissionPresetAllowed(preset),
+  })),
+)
 
 function handleWorkspaceSelect(cwd: string): void {
   startThread(cwd)
@@ -191,7 +244,7 @@ onMounted(() => {
         :can-interrupt="canInterruptTurn"
         :send-hint="sendStateHint"
         :hint-ready="canSendMessage"
-        :disabled="!isConnected || !initialized || !activeThreadId || isTurnActive"
+        :disabled="!isConnected || !initialized"
         :settings-disabled="!isConnected || !initialized"
         :model-options="modelOptions"
         :selected-model-id="selectedModelId"
@@ -270,6 +323,27 @@ onMounted(() => {
       :list-directories="listDirectories"
       @select="handleWorkspaceSelect"
       @cancel="workspacePickerOpen = false"
+    />
+
+    <SlashCommandPickerModal
+      v-if="isSlashModelPickerOpen"
+      title="モデルを選択"
+      subtitle="`/model` の引数なし実行で開きます。"
+      :options="slashModelPickerOptions"
+      :selected-id="selectedModelId"
+      empty-label="利用可能なモデルがありません。"
+      @select="selectSlashModelFromPicker"
+      @cancel="closeSlashModelPicker"
+    />
+
+    <SlashCommandPickerModal
+      v-if="isSlashPermissionsPickerOpen"
+      title="権限プリセットを選択"
+      subtitle="`/permissions` または `/approvals` の引数なし実行で開きます。"
+      :options="slashPermissionPickerOptions"
+      :selected-id="selectedExecutionModePreset"
+      @select="selectSlashPermissionsPresetFromPicker"
+      @cancel="closeSlashPermissionsPicker"
     />
   </div>
 </template>

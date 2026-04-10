@@ -4,6 +4,7 @@ import { flushPromises, mount } from '@vue/test-utils'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 
 import { useBridgeClient } from '../useBridgeClient'
+import { INIT_PROMPT_FOR_SLASH_COMMAND } from '@/lib/initPromptForSlashCommand'
 import type { ModelOption, ReasoningEffort } from '@/types'
 
 const bridgeMock = vi.hoisted(() => {
@@ -1435,5 +1436,527 @@ describe('useBridgeClient quickStartConversation', () => {
     } finally {
       vi.useRealTimers()
     }
+  })
+})
+
+describe('useBridgeClient slash commands', () => {
+  beforeEach(() => {
+    bridgeMock.reset()
+    vi.unstubAllGlobals()
+  })
+
+  it('handles unknown slash commands locally without calling turn/start', async () => {
+    bridgeMock.setRequestHandler(async (method) => {
+      if (method === 'initialize') {
+        return { userAgent: 'mock-codex-agent' }
+      }
+      if (method === 'thread/start') {
+        return { thread: { id: 'thread-slash-unknown-1' } }
+      }
+      if (method === 'model/list') {
+        return { models: [] }
+      }
+      throw new Error(`Unexpected method: ${method}`)
+    })
+
+    const wrapper = mount(HostComponent)
+    const vm = wrapper.vm as unknown as {
+      connect: () => Promise<void>
+      startThread: () => Promise<void>
+      sendTurn: () => Promise<void>
+      messageInput: string
+      messages: Array<{ role: string; text: string }>
+    }
+
+    await vm.connect()
+    await flushPromises()
+    await vm.startThread()
+    await flushPromises()
+
+    vm.messageInput = '/does-not-exist'
+    await vm.sendTurn()
+    await flushPromises()
+
+    const turnStartCalls = bridgeMock.getRequestCalls().filter((call) => call.method === 'turn/start')
+    expect(turnStartCalls).toHaveLength(0)
+    expect(vm.messages[vm.messages.length - 1]).toMatchObject({
+      role: 'system',
+    })
+    expect(vm.messages[vm.messages.length - 1]?.text).toContain("unknown slash command '/does-not-exist'")
+
+    wrapper.unmount()
+  })
+
+  it('opens a picker modal for /model with no arguments', async () => {
+    bridgeMock.setRequestHandler(async (method) => {
+      if (method === 'initialize') {
+        return { userAgent: 'mock-codex-agent' }
+      }
+      if (method === 'model/list') {
+        return {
+          models: [
+            {
+              id: 'gpt-4o-mini',
+              name: 'GPT 4o Mini',
+            },
+            {
+              id: 'o4-mini',
+              name: 'o4-mini',
+            },
+          ],
+        }
+      }
+      throw new Error(`Unexpected method: ${method}`)
+    })
+
+    const wrapper = mount(HostComponent)
+    const vm = wrapper.vm as unknown as {
+      connect: () => Promise<void>
+      sendTurn: () => Promise<void>
+      messageInput: string
+      isSlashModelPickerOpen: boolean
+    }
+
+    await vm.connect()
+    await flushPromises()
+
+    vm.messageInput = '/model'
+    await vm.sendTurn()
+    await flushPromises()
+
+    expect(vm.isSlashModelPickerOpen).toBe(true)
+    const turnStartCalls = bridgeMock.getRequestCalls().filter((call) => call.method === 'turn/start')
+    expect(turnStartCalls).toHaveLength(0)
+    expect(bridgeMock.getRequestCalls().filter((call) => call.method === 'model/list')).toHaveLength(1)
+
+    wrapper.unmount()
+  })
+
+  it('opens a picker modal for /permissions with no arguments', async () => {
+    bridgeMock.setRequestHandler(async (method) => {
+      if (method === 'initialize') {
+        return { userAgent: 'mock-codex-agent' }
+      }
+      if (method === 'model/list') {
+        return { models: [] }
+      }
+      throw new Error(`Unexpected method: ${method}`)
+    })
+
+    const wrapper = mount(HostComponent)
+    const vm = wrapper.vm as unknown as {
+      connect: () => Promise<void>
+      sendTurn: () => Promise<void>
+      messageInput: string
+      isSlashPermissionsPickerOpen: boolean
+    }
+
+    await vm.connect()
+    await flushPromises()
+
+    vm.messageInput = '/permissions'
+    await vm.sendTurn()
+    await flushPromises()
+
+    expect(vm.isSlashPermissionsPickerOpen).toBe(true)
+    const batchWriteCalls = bridgeMock.getRequestCalls().filter((call) => call.method === 'config/batchWrite')
+    expect(batchWriteCalls).toHaveLength(0)
+
+    wrapper.unmount()
+  })
+
+  it('keeps model selection unchanged when /model effort is invalid', async () => {
+    bridgeMock.setRequestHandler(async (method) => {
+      if (method === 'initialize') {
+        return { userAgent: 'mock-codex-agent' }
+      }
+      if (method === 'model/list') {
+        return {
+          models: [
+            {
+              id: 'gpt-4o-mini',
+              name: 'GPT 4o Mini',
+              supportedReasoningEfforts: ['low', 'medium', 'high'],
+            },
+            {
+              id: 'o4-mini',
+              name: 'o4-mini',
+              supportedReasoningEfforts: ['none', 'low'],
+            },
+          ],
+        }
+      }
+      throw new Error(`Unexpected method: ${method}`)
+    })
+
+    const wrapper = mount(HostComponent)
+    const vm = wrapper.vm as unknown as {
+      connect: () => Promise<void>
+      sendTurn: () => Promise<void>
+      messageInput: string
+      selectedModelId: string
+      messages: Array<{ role: string; text: string }>
+    }
+
+    await vm.connect()
+    await flushPromises()
+
+    vm.selectedModelId = 'o4-mini'
+    vm.messageInput = '/model gpt-4o-mini not-an-effort'
+    await vm.sendTurn()
+    await flushPromises()
+
+    expect(vm.selectedModelId).toBe('o4-mini')
+    expect(vm.messages[vm.messages.length - 1]?.text).toContain("invalid effort 'not-an-effort'")
+
+    wrapper.unmount()
+  })
+
+  it('allows /status while turn is active and blocks /model during an active turn', async () => {
+    bridgeMock.setRequestHandler(async (method) => {
+      if (method === 'initialize') {
+        return { userAgent: 'mock-codex-agent' }
+      }
+      if (method === 'thread/start') {
+        return { thread: { id: 'thread-slash-active-1' } }
+      }
+      if (method === 'turn/start') {
+        return { turn: { id: 'turn-slash-active-1' } }
+      }
+      if (method === 'model/list') {
+        return {
+          models: [
+            {
+              id: 'gpt-4o-mini',
+              name: 'GPT 4o Mini',
+              supportedReasoningEfforts: ['low', 'medium', 'high'],
+            },
+          ],
+        }
+      }
+      throw new Error(`Unexpected method: ${method}`)
+    })
+
+    const wrapper = mount(HostComponent)
+    const vm = wrapper.vm as unknown as {
+      connect: () => Promise<void>
+      startThread: () => Promise<void>
+      sendTurn: () => Promise<void>
+      messageInput: string
+      messages: Array<{ role: string; text: string }>
+      canSendMessage: boolean
+    }
+
+    await vm.connect()
+    await flushPromises()
+    await vm.startThread()
+    await flushPromises()
+
+    vm.messageInput = 'normal input'
+    await vm.sendTurn()
+    await flushPromises()
+
+    getClientInstance().emitMessage({
+      method: 'thread/tokenUsage/updated',
+      params: {
+        threadId: 'thread-slash-active-1',
+        turnId: 'turn-slash-active-1',
+        tokenUsage: {
+          total: {
+            totalTokens: 1200,
+            inputTokens: 700,
+            cachedInputTokens: 100,
+            outputTokens: 400,
+            reasoningOutputTokens: 80,
+          },
+          last: {
+            totalTokens: 320,
+            inputTokens: 180,
+            cachedInputTokens: 40,
+            outputTokens: 140,
+            reasoningOutputTokens: 20,
+          },
+          modelContextWindow: 128000,
+        },
+      },
+    })
+    await flushPromises()
+
+    vm.messageInput = '/status'
+    expect(vm.canSendMessage).toBe(true)
+    await vm.sendTurn()
+    await flushPromises()
+    expect(vm.messages[vm.messages.length - 1]?.text).toContain('`/status`')
+    expect(vm.messages[vm.messages.length - 1]?.text).toContain('tokens(last): total=320')
+
+    vm.messageInput = '/model gpt-4o-mini'
+    await vm.sendTurn()
+    await flushPromises()
+    expect(vm.messages[vm.messages.length - 1]?.text).toContain("'/model' is disabled while a turn is in progress")
+
+    const turnStartCalls = bridgeMock.getRequestCalls().filter((call) => call.method === 'turn/start')
+    expect(turnStartCalls).toHaveLength(1)
+
+    wrapper.unmount()
+  })
+
+  it('updates permissions through /approvals alias using config/batchWrite', async () => {
+    bridgeMock.setRequestHandler(async (method) => {
+      if (method === 'initialize') {
+        return { userAgent: 'mock-codex-agent' }
+      }
+      if (method === 'thread/start') {
+        return { thread: { id: 'thread-slash-approvals-1' } }
+      }
+      if (method === 'model/list') {
+        return { models: [] }
+      }
+      if (method === 'config/batchWrite') {
+        return { version: 'v-slash-approvals-2' }
+      }
+      if (method === 'config/read') {
+        return {
+          version: 'v-slash-approvals-2',
+          result: {
+            values: {
+              approvalPolicy: 'on-request',
+              sandboxMode: 'workspace-write',
+            },
+          },
+        }
+      }
+      if (method === 'configRequirements/read') {
+        return {
+          requirements: {
+            allowedApprovalPolicies: ['on-request', 'never'],
+            allowedSandboxModes: ['read-only', 'workspace-write', 'danger-full-access'],
+          },
+        }
+      }
+      throw new Error(`Unexpected method: ${method}`)
+    })
+
+    const wrapper = mount(HostComponent)
+    const vm = wrapper.vm as unknown as {
+      connect: () => Promise<void>
+      startThread: () => Promise<void>
+      loadConfig: () => Promise<void>
+      sendTurn: () => Promise<void>
+      messageInput: string
+      messages: Array<{ role: string; text: string }>
+    }
+
+    await vm.connect()
+    await flushPromises()
+    await vm.startThread()
+    await flushPromises()
+    await vm.loadConfig()
+    await flushPromises()
+
+    vm.messageInput = '/approvals auto'
+    await vm.sendTurn()
+    await flushPromises()
+
+    const batchWriteCall = bridgeMock.getRequestCalls().find((call) => call.method === 'config/batchWrite')
+    expect(batchWriteCall?.params).toMatchObject({
+      edits: [
+        {
+          keyPath: 'approval_policy',
+          value: 'on-request',
+        },
+        {
+          keyPath: 'sandbox_mode',
+          value: 'workspace-write',
+        },
+      ],
+    })
+    expect(vm.messages[vm.messages.length - 1]?.text).toContain('Permissions updated: auto')
+
+    wrapper.unmount()
+  })
+
+  it('uses slash diff API and falls back to cached turn diff when API output is empty', async () => {
+    bridgeMock.setRequestHandler(async (method) => {
+      if (method === 'initialize') {
+        return { userAgent: 'mock-codex-agent' }
+      }
+      if (method === 'thread/start') {
+        return { thread: { id: 'thread-slash-diff-1' } }
+      }
+      if (method === 'model/list') {
+        return { models: [] }
+      }
+      throw new Error(`Unexpected method: ${method}`)
+    })
+    vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL) => {
+      const url = new URL(String(input), 'http://localhost')
+      if (url.pathname === '/api/slash/diff') {
+        return {
+          ok: true,
+          json: async () => ({
+            text: '',
+          }),
+        } as Response
+      }
+      throw new Error(`Unexpected fetch call: ${url.pathname}`)
+    }))
+
+    const wrapper = mount(HostComponent)
+    const vm = wrapper.vm as unknown as {
+      connect: () => Promise<void>
+      startThread: () => Promise<void>
+      sendTurn: () => Promise<void>
+      messageInput: string
+      messages: Array<{ role: string; text: string }>
+    }
+
+    await vm.connect()
+    await flushPromises()
+    await vm.startThread()
+    await flushPromises()
+
+    getClientInstance().emitMessage({
+      method: 'turn/started',
+      params: {
+        turn: {
+          id: 'turn-slash-diff-1',
+        },
+      },
+    })
+    getClientInstance().emitMessage({
+      method: 'turn/diff/updated',
+      params: {
+        turnId: 'turn-slash-diff-1',
+        diff: {
+          unifiedDiff: 'cached diff text',
+        },
+      },
+    })
+    await flushPromises()
+
+    vm.messageInput = '/diff'
+    await vm.sendTurn()
+    await flushPromises()
+
+    expect(vm.messages[vm.messages.length - 1]?.text).toContain('cached diff text')
+    const turnStartCalls = bridgeMock.getRequestCalls().filter((call) => call.method === 'turn/start')
+    expect(turnStartCalls).toHaveLength(0)
+
+    wrapper.unmount()
+  })
+
+  it('skips /init when AGENTS.md already exists and never calls turn/start', async () => {
+    bridgeMock.setRequestHandler(async (method) => {
+      if (method === 'initialize') {
+        return { userAgent: 'mock-codex-agent' }
+      }
+      if (method === 'thread/start') {
+        return { thread: { id: 'thread-slash-init-skip-1' } }
+      }
+      if (method === 'model/list') {
+        return { models: [] }
+      }
+      throw new Error(`Unexpected method: ${method}`)
+    })
+    vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL) => {
+      const url = new URL(String(input), 'http://localhost')
+      if (url.pathname === '/api/slash/init-status') {
+        return {
+          ok: true,
+          json: async () => ({
+            exists: true,
+            agentsPath: '/tmp/project/AGENTS.md',
+          }),
+        } as Response
+      }
+      throw new Error(`Unexpected fetch call: ${url.pathname}`)
+    }))
+
+    const wrapper = mount(HostComponent)
+    const vm = wrapper.vm as unknown as {
+      connect: () => Promise<void>
+      startThread: () => Promise<void>
+      sendTurn: () => Promise<void>
+      messageInput: string
+      messages: Array<{ role: string; text: string }>
+    }
+
+    await vm.connect()
+    await flushPromises()
+    await vm.startThread()
+    await flushPromises()
+
+    vm.messageInput = '/init'
+    await vm.sendTurn()
+    await flushPromises()
+
+    const turnStartCalls = bridgeMock.getRequestCalls().filter((call) => call.method === 'turn/start')
+    expect(turnStartCalls).toHaveLength(0)
+    expect(vm.messages[vm.messages.length - 1]?.text).toContain('Skipping /init')
+
+    wrapper.unmount()
+  })
+
+  it('sends /init via hidden turn/start prompt when AGENTS.md does not exist', async () => {
+    bridgeMock.setRequestHandler(async (method) => {
+      if (method === 'initialize') {
+        return { userAgent: 'mock-codex-agent' }
+      }
+      if (method === 'thread/start') {
+        return { thread: { id: 'thread-slash-init-run-1' } }
+      }
+      if (method === 'model/list') {
+        return { models: [] }
+      }
+      if (method === 'turn/start') {
+        return { turn: { id: 'turn-slash-init-run-1' } }
+      }
+      throw new Error(`Unexpected method: ${method}`)
+    })
+    vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL) => {
+      const url = new URL(String(input), 'http://localhost')
+      if (url.pathname === '/api/slash/init-status') {
+        return {
+          ok: true,
+          json: async () => ({
+            exists: false,
+            agentsPath: '/tmp/project/AGENTS.md',
+          }),
+        } as Response
+      }
+      throw new Error(`Unexpected fetch call: ${url.pathname}`)
+    }))
+
+    const wrapper = mount(HostComponent)
+    const vm = wrapper.vm as unknown as {
+      connect: () => Promise<void>
+      startThread: () => Promise<void>
+      sendTurn: () => Promise<void>
+      messageInput: string
+      messages: Array<{ role: string; text: string }>
+    }
+
+    await vm.connect()
+    await flushPromises()
+    await vm.startThread()
+    await flushPromises()
+
+    vm.messageInput = '/init'
+    await vm.sendTurn()
+    await flushPromises()
+
+    const turnStartCalls = bridgeMock.getRequestCalls().filter((call) => call.method === 'turn/start')
+    expect(turnStartCalls).toHaveLength(1)
+    expect(turnStartCalls[0]?.params).toMatchObject({
+      input: [
+        {
+          type: 'text',
+          text: INIT_PROMPT_FOR_SLASH_COMMAND,
+        },
+      ],
+    })
+    expect(vm.messages.find((message) => message.role === 'user' && message.text === INIT_PROMPT_FOR_SLASH_COMMAND)).toBeUndefined()
+
+    wrapper.unmount()
   })
 })

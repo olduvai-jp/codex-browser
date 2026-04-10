@@ -24,15 +24,17 @@ export type SandboxMode = (typeof SANDBOX_MODE_VALUES)[number]
 
 export const EXECUTION_MODE_PRESET_VALUES = [
   'default',
-  'full-auto',
-  'dangerously-bypass',
+  'read-only',
+  'auto',
+  'full-access',
   'custom',
 ] as const
 export type ExecutionModePreset = (typeof EXECUTION_MODE_PRESET_VALUES)[number]
 
 export const EXECUTION_MODE_SELECTABLE_PRESET_VALUES = [
-  'full-auto',
-  'dangerously-bypass',
+  'read-only',
+  'auto',
+  'full-access',
 ] as const
 export type ExecutionModeSelectablePreset = (typeof EXECUTION_MODE_SELECTABLE_PRESET_VALUES)[number]
 

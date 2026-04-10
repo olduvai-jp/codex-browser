@@ -84,22 +84,22 @@ describe('ChatComposer', () => {
   it('emits execution mode selection and save action', async () => {
     const wrapper = mountComposer()
 
-    await wrapper.get('select[data-testid="execution-mode-select"]').setValue('full-auto')
-    await wrapper.setProps({ selectedExecutionModePreset: 'full-auto' })
+    await wrapper.get('select[data-testid="execution-mode-select"]').setValue('auto')
+    await wrapper.setProps({ selectedExecutionModePreset: 'auto' })
     await wrapper.get('button[data-testid="execution-mode-save-button"]').trigger('click')
 
-    expect(wrapper.emitted('update:selectedExecutionModePreset')).toEqual([['full-auto']])
+    expect(wrapper.emitted('update:selectedExecutionModePreset')).toEqual([['auto']])
     expect(wrapper.emitted('saveExecutionModeConfig')).toHaveLength(1)
   })
 
-  it('saves dangerously bypass execution mode without confirmation', async () => {
+  it('saves full-access execution mode without confirmation', async () => {
     const wrapper = mountComposer()
 
-    await wrapper.get('select[data-testid="execution-mode-select"]').setValue('dangerously-bypass')
-    await wrapper.setProps({ selectedExecutionModePreset: 'dangerously-bypass' })
+    await wrapper.get('select[data-testid="execution-mode-select"]').setValue('full-access')
+    await wrapper.setProps({ selectedExecutionModePreset: 'full-access' })
     await wrapper.get('button[data-testid="execution-mode-save-button"]').trigger('click')
 
-    expect(wrapper.emitted('update:selectedExecutionModePreset')).toEqual([['dangerously-bypass']])
+    expect(wrapper.emitted('update:selectedExecutionModePreset')).toEqual([['full-access']])
     expect(wrapper.emitted('saveExecutionModeConfig')).toHaveLength(1)
   })
 
@@ -113,7 +113,7 @@ describe('ChatComposer', () => {
 
     const dangerOption = wrapper
       .get('select[data-testid="execution-mode-select"]')
-      .find('option[value="dangerously-bypass"]')
+      .find('option[value="full-access"]')
     expect(dangerOption.attributes('disabled')).toBeDefined()
   })
 

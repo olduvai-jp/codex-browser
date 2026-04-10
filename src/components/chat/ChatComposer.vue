@@ -257,7 +257,35 @@ onMounted(async () => {
     <!-- Gradient fade -->
     <div class="pointer-events-none absolute bottom-full left-0 right-0 h-8 bg-gradient-to-t from-chat-bg to-transparent" />
 
-    <form class="mx-auto w-full max-w-[48rem]" @submit.prevent="emit('send')">
+    <form class="relative mx-auto w-full max-w-[48rem]" @submit.prevent="emit('send')">
+      <!-- Slash suggestions floating above composer -->
+      <div
+        v-if="props.slashSuggestionsOpen && props.slashSuggestions.length > 0"
+        id="slash-suggestions-listbox"
+        data-testid="slash-suggestions"
+        class="absolute bottom-full left-0 right-0 mb-2 max-h-56 overflow-y-auto rounded-xl border border-border-default/70 bg-surface/95 p-1 shadow-lg backdrop-blur-sm"
+        role="listbox"
+      >
+        <button
+          v-for="(option, index) in props.slashSuggestions"
+          :id="getSlashSuggestionOptionId(index)"
+          :key="option.id"
+          type="button"
+          role="option"
+          :aria-selected="isActiveSlashSuggestion(index) ? 'true' : 'false'"
+          :disabled="option.disabled"
+          class="flex w-full flex-col items-start gap-0.5 rounded-lg px-2 py-1.5 text-left transition-colors hover:bg-surface-secondary disabled:cursor-not-allowed disabled:opacity-40"
+          :class="isActiveSlashSuggestion(index) ? 'bg-surface-secondary' : ''"
+          :data-testid="`slash-suggestion-option-${index}`"
+          :data-active="isActiveSlashSuggestion(index) ? 'true' : 'false'"
+          @mousedown="onSlashSuggestionMouseDown"
+          @click="onSlashSuggestionClick(option.id)"
+        >
+          <span class="text-xs font-medium text-text-primary">{{ option.label }}</span>
+          <span v-if="option.description" class="text-[11px] text-text-secondary">{{ option.description }}</span>
+        </button>
+      </div>
+
       <div class="rounded-2xl border border-composer-border bg-composer-bg p-3 shadow-sm">
         <!-- Input row: textarea + send button -->
         <div class="flex items-end gap-2">
@@ -304,32 +332,6 @@ onMounted(async () => {
               <path d="M12 5v14" />
               <path d="m6 11 6-6 6 6" />
             </svg>
-          </button>
-        </div>
-        <div
-          v-if="props.slashSuggestionsOpen && props.slashSuggestions.length > 0"
-          id="slash-suggestions-listbox"
-          data-testid="slash-suggestions"
-          class="mt-1 max-h-56 overflow-y-auto rounded-xl border border-border-default/70 bg-surface/95 p-1 shadow-lg"
-          role="listbox"
-        >
-          <button
-            v-for="(option, index) in props.slashSuggestions"
-            :id="getSlashSuggestionOptionId(index)"
-            :key="option.id"
-            type="button"
-            role="option"
-            :aria-selected="isActiveSlashSuggestion(index) ? 'true' : 'false'"
-            :disabled="option.disabled"
-            class="flex w-full flex-col items-start gap-0.5 rounded-lg px-2 py-1.5 text-left transition-colors hover:bg-surface-secondary disabled:cursor-not-allowed disabled:opacity-40"
-            :class="isActiveSlashSuggestion(index) ? 'bg-surface-secondary' : ''"
-            :data-testid="`slash-suggestion-option-${index}`"
-            :data-active="isActiveSlashSuggestion(index) ? 'true' : 'false'"
-            @mousedown="onSlashSuggestionMouseDown"
-            @click="onSlashSuggestionClick(option.id)"
-          >
-            <span class="text-xs font-medium text-text-primary">{{ option.label }}</span>
-            <span v-if="option.description" class="text-[11px] text-text-secondary">{{ option.description }}</span>
           </button>
         </div>
         <!-- Parameters row -->

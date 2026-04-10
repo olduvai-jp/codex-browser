@@ -6,6 +6,7 @@ import type {
   ExecutionModePreset,
   ExecutionModeRequirements,
   ReasoningEffort,
+  SlashSuggestionItem,
 } from '@/types'
 
 function mountComposer(overrides: Partial<{
@@ -24,6 +25,9 @@ function mountComposer(overrides: Partial<{
   selectedExecutionModePreset: ExecutionModePreset
   executionModeRequirements: ExecutionModeRequirements
   executionModeSaving: boolean
+  slashSuggestionsOpen: boolean
+  slashSuggestions: SlashSuggestionItem[]
+  activeSlashSuggestionIndex: number
 }> = {}) {
   return mount(ChatComposer, {
     props: {
@@ -48,6 +52,9 @@ function mountComposer(overrides: Partial<{
         allowedSandboxModes: ['read-only', 'workspace-write', 'danger-full-access'],
       },
       executionModeSaving: false,
+      slashSuggestionsOpen: false,
+      slashSuggestions: [],
+      activeSlashSuggestionIndex: -1,
       ...overrides,
     },
   })
@@ -69,6 +76,118 @@ describe('ChatComposer', () => {
     await wrapper.get('textarea').trigger('keydown.enter', { isComposing: true, keyCode: 229 })
 
     expect(wrapper.emitted('send')).toBeUndefined()
+  })
+
+  it('commits active slash suggestion on Enter instead of send when suggestions are open', async () => {
+    const wrapper = mountComposer({
+      slashSuggestionsOpen: true,
+      slashSuggestions: [
+        {
+          id: 'command:model',
+          kind: 'command',
+          label: '/model',
+          insertText: '/model ',
+        },
+      ],
+      activeSlashSuggestionIndex: 0,
+    })
+
+    await wrapper.get('textarea').trigger('keydown.enter', { isComposing: false, keyCode: 13 })
+
+    expect(wrapper.emitted('slashCommitSelection')).toHaveLength(1)
+    expect(wrapper.emitted('send')).toBeUndefined()
+  })
+
+  it('falls back to send on Enter when all visible slash suggestions are disabled', async () => {
+    const wrapper = mountComposer({
+      slashSuggestionsOpen: true,
+      slashSuggestions: [
+        {
+          id: 'permissions:read-only',
+          kind: 'permissions',
+          label: 'read-only',
+          insertText: '/permissions read-only ',
+          disabled: true,
+        },
+      ],
+      activeSlashSuggestionIndex: 0,
+    })
+
+    await wrapper.get('textarea').trigger('keydown.enter', { isComposing: false, keyCode: 13 })
+
+    expect(wrapper.emitted('slashCommitSelection')).toBeUndefined()
+    expect(wrapper.emitted('send')).toHaveLength(1)
+  })
+
+  it('handles slash suggestion keyboard controls while popup is open', async () => {
+    const wrapper = mountComposer({
+      slashSuggestionsOpen: true,
+      slashSuggestions: [
+        {
+          id: 'command:model',
+          kind: 'command',
+          label: '/model',
+          insertText: '/model ',
+        },
+        {
+          id: 'command:status',
+          kind: 'command',
+          label: '/status',
+          insertText: '/status ',
+        },
+      ],
+      activeSlashSuggestionIndex: 0,
+    })
+
+    await wrapper.get('textarea').trigger('keydown', { key: 'ArrowDown' })
+    await wrapper.get('textarea').trigger('keydown', { key: 'ArrowUp' })
+    await wrapper.get('textarea').trigger('keydown', { key: 'Tab' })
+    await wrapper.get('textarea').trigger('keydown', { key: 'Escape' })
+
+    expect(wrapper.emitted('slashMoveSelection')).toEqual([['down'], ['up']])
+    expect(wrapper.emitted('slashCommitSelection')).toHaveLength(1)
+    expect(wrapper.emitted('slashCloseSuggestions')).toHaveLength(1)
+  })
+
+  it('closes slash suggestions on Tab when all visible suggestions are disabled', async () => {
+    const wrapper = mountComposer({
+      slashSuggestionsOpen: true,
+      slashSuggestions: [
+        {
+          id: 'permissions:full-access',
+          kind: 'permissions',
+          label: 'full-access',
+          insertText: '/permissions full-access ',
+          disabled: true,
+        },
+      ],
+      activeSlashSuggestionIndex: 0,
+    })
+
+    await wrapper.get('textarea').trigger('keydown', { key: 'Tab' })
+
+    expect(wrapper.emitted('slashCommitSelection')).toBeUndefined()
+    expect(wrapper.emitted('slashCloseSuggestions')).toHaveLength(1)
+  })
+
+  it('renders slash suggestions and emits selection on click', async () => {
+    const wrapper = mountComposer({
+      slashSuggestionsOpen: true,
+      slashSuggestions: [
+        {
+          id: 'model:gpt-4o-mini',
+          kind: 'model',
+          label: 'gpt-4o-mini',
+          insertText: '/model gpt-4o-mini ',
+        },
+      ],
+      activeSlashSuggestionIndex: 0,
+    })
+
+    expect(wrapper.find('[data-testid="slash-suggestions"]').exists()).toBe(true)
+    await wrapper.get('[data-testid="slash-suggestion-option-0"]').trigger('click')
+
+    expect(wrapper.emitted('slashSelectSuggestion')).toEqual([['model:gpt-4o-mini']])
   })
 
   it('emits model and thinking updates from select controls', async () => {

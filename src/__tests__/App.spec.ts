@@ -2977,6 +2977,62 @@ describe('App.vue ui phase-1 flows', () => {
     wrapper.unmount()
   })
 
+  it('wires live slash suggestions in composer and keeps textarea focus after click commit', async () => {
+    let threadStartCallCount = 0
+    bridgeMock.setRequestHandler(async (method) => {
+      if (method === 'initialize') {
+        queueMicrotask(() => {
+          getClientInstance().emitMessage({
+            type: 'bridge/status',
+            payload: {
+              event: 'bridge-started',
+              details: {
+                cwd: '/workspace/current',
+              },
+            },
+          })
+        })
+        return { userAgent: 'mock-codex-agent' }
+      }
+
+      if (method === 'thread/list') {
+        return {
+          threads: [],
+        }
+      }
+
+      if (method === 'thread/start') {
+        threadStartCallCount += 1
+        if (threadStartCallCount === 1) {
+          throw new Error('quick start thread/start should not activate test state')
+        }
+        return { thread: { id: 'thread-slash-wiring-1' } }
+      }
+
+      throw new Error(`Unexpected method: ${method}`)
+    })
+
+    const wrapper = mount(App, { attachTo: document.body })
+    await connectAndInitialize(wrapper)
+
+    const textarea = wrapper.get('textarea')
+    await textarea.setValue('/mo')
+    await flushPromises()
+
+    expect(getByTestId(wrapper, 'slash-suggestions').exists()).toBe(true)
+    expect(getByTestId(wrapper, 'slash-suggestion-option-0').text()).toContain('/model')
+
+    ;(textarea.element as HTMLTextAreaElement).focus()
+    await getByTestId(wrapper, 'slash-suggestion-option-0').trigger('click')
+    await flushPromises()
+
+    expect((textarea.element as HTMLTextAreaElement).value).toBe('/model ')
+    expect(document.activeElement).toBe(textarea.element)
+    expect(wrapper.find('[data-testid="slash-suggestions"]').exists()).toBe(false)
+
+    wrapper.unmount()
+  })
+
   it('shows user guidance when turn/start fails', async () => {
     bridgeMock.setRequestHandler(async (method) => {
       if (method === 'initialize') {

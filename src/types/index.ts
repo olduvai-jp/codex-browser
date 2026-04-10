@@ -16,6 +16,16 @@ export const REASONING_EFFORT_VALUES = [
 ] as const
 export type ReasoningEffort = (typeof REASONING_EFFORT_VALUES)[number]
 
+export type SlashSuggestionKind = 'command' | 'model' | 'permissions'
+export type SlashSuggestionItem = {
+  id: string
+  kind: SlashSuggestionKind
+  label: string
+  description?: string
+  insertText: string
+  disabled?: boolean
+}
+
 export const APPROVAL_POLICY_VALUES = ['on-request', 'on-failure', 'never', 'untrusted'] as const
 export type ApprovalPolicy = (typeof APPROVAL_POLICY_VALUES)[number]
 

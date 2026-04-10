@@ -25,6 +25,7 @@ import {
   EXECUTION_MODE_PRESET_VALUES,
   REASONING_EFFORT_VALUES,
   SANDBOX_MODE_VALUES,
+  type SlashSuggestionItem,
   type ApprovalPolicy,
   type ExecutionModeConfig,
   type ExecutionModePreset,
@@ -105,6 +106,14 @@ type ParsedSlashCommand = {
   args: string[]
   rawArgs: string
 }
+type ParsedLiveSlashInput = {
+  command: string
+  rawCommand: string
+  rawAfterCommand: string
+  args: string[]
+  hasTrailingWhitespace: boolean
+}
+type SlashSuggestionDirection = 'up' | 'down'
 type TokenUsageBreakdown = {
   totalTokens: number
   inputTokens: number
@@ -569,7 +578,7 @@ function isExecutionModePreset(value: string): value is ExecutionModePreset {
   return EXECUTION_MODE_PRESET_VALUES.includes(value as ExecutionModePreset)
 }
 
-const SLASH_COMMAND_NAMES = new Set<SlashCommandName>([
+const SLASH_COMMAND_LIST: SlashCommandName[] = [
   'model',
   'permissions',
   'approvals',
@@ -577,7 +586,8 @@ const SLASH_COMMAND_NAMES = new Set<SlashCommandName>([
   'diff',
   'clear',
   'init',
-])
+]
+const SLASH_COMMAND_NAMES = new Set<SlashCommandName>(SLASH_COMMAND_LIST)
 const SLASH_COMMAND_BLOCKED_DURING_TURN = new Set<SlashCommandName>([
   'model',
   'permissions',
@@ -585,6 +595,20 @@ const SLASH_COMMAND_BLOCKED_DURING_TURN = new Set<SlashCommandName>([
   'clear',
   'init',
 ])
+const SLASH_COMMAND_SUGGESTION_DESCRIPTIONS: Record<SlashCommandName, string> = {
+  model: 'Switch model: /model <model-id> [effort]',
+  permissions: 'Set execution preset: /permissions <read-only|auto|full-access>',
+  approvals: 'Alias of /permissions',
+  status: 'Show current session status',
+  diff: 'Show working-tree diff',
+  clear: 'Start a new conversation',
+  init: 'Generate AGENTS.md scaffold',
+}
+const EXECUTION_MODE_PRESET_SUGGESTION_DESCRIPTIONS: Record<ExecutionModeSelectablePreset, string> = {
+  'read-only': 'on-request + read-only',
+  auto: 'on-request + workspace-write',
+  'full-access': 'never + danger-full-access',
+}
 const EXECUTION_MODE_COMMAND_PRESET_VALUES: ExecutionModeSelectablePreset[] = [
   'read-only',
   'auto',
@@ -627,6 +651,162 @@ function parseSlashCommandInput(text: string): ParsedSlashCommand | null {
     args: rawArgs.length > 0 ? rawArgs.split(/\s+/) : [],
     rawArgs,
   }
+}
+
+function parseLiveSlashInput(text: string): ParsedLiveSlashInput | null {
+  const trimmedStart = text.trimStart()
+  if (!trimmedStart.startsWith('/')) {
+    return null
+  }
+
+  const afterSlash = trimmedStart.slice(1)
+  const hasTrailingWhitespace = /\s$/.test(afterSlash)
+  if (afterSlash.length === 0) {
+    return {
+      command: '',
+      rawCommand: '',
+      rawAfterCommand: '',
+      args: [],
+      hasTrailingWhitespace,
+    }
+  }
+
+  const firstWhitespaceIndex = afterSlash.search(/\s/)
+  const rawCommand =
+    firstWhitespaceIndex === -1
+      ? afterSlash
+      : afterSlash.slice(0, firstWhitespaceIndex)
+  const rawAfterCommand =
+    firstWhitespaceIndex === -1
+      ? ''
+      : afterSlash.slice(firstWhitespaceIndex)
+  const trimmedRawArgs = rawAfterCommand.trim()
+
+  return {
+    command: rawCommand.toLowerCase(),
+    rawCommand,
+    rawAfterCommand,
+    args: trimmedRawArgs.length > 0 ? trimmedRawArgs.split(/\s+/) : [],
+    hasTrailingWhitespace,
+  }
+}
+
+function firstEnabledSlashSuggestionIndex(items: SlashSuggestionItem[]): number {
+  if (items.length === 0) {
+    return -1
+  }
+  const firstEnabled = items.findIndex((item) => item.disabled !== true)
+  return firstEnabled === -1 ? 0 : firstEnabled
+}
+
+function getNextSlashSuggestionIndex(
+  items: SlashSuggestionItem[],
+  currentIndex: number,
+  direction: SlashSuggestionDirection,
+): number {
+  if (items.length === 0) {
+    return -1
+  }
+
+  const step = direction === 'down' ? 1 : -1
+  let index = currentIndex
+  const normalizedStart = index >= 0 && index < items.length ? index : firstEnabledSlashSuggestionIndex(items)
+  index = normalizedStart
+  for (let attempts = 0; attempts < items.length; attempts += 1) {
+    index = (index + step + items.length) % items.length
+    const candidate = items[index]
+    if (candidate && candidate.disabled !== true) {
+      return index
+    }
+  }
+
+  return normalizedStart
+}
+
+function buildModelSlashSuggestions(
+  parsed: ParsedLiveSlashInput,
+  options: ModelOption[],
+): SlashSuggestionItem[] {
+  if (parsed.args.length >= 2) {
+    return []
+  }
+  if (parsed.args.length === 1 && parsed.hasTrailingWhitespace) {
+    return []
+  }
+
+  const modelPrefix = parsed.args[0]?.toLowerCase() ?? ''
+  return options
+    .filter((option) => option.id.toLowerCase().startsWith(modelPrefix))
+    .map((option) => ({
+      id: `model:${option.id}`,
+      kind: 'model',
+      label: option.id,
+      description:
+        option.supportedReasoningEfforts && option.supportedReasoningEfforts.length > 0
+          ? `effort: ${option.supportedReasoningEfforts.join(', ')}`
+          : undefined,
+      insertText: `/model ${option.id} `,
+    }))
+}
+
+function buildPermissionsSlashSuggestions(
+  parsed: ParsedLiveSlashInput,
+  requirements: ExecutionModeRequirements,
+): SlashSuggestionItem[] {
+  if (parsed.args.length >= 2) {
+    return []
+  }
+  if (parsed.args.length === 1 && parsed.hasTrailingWhitespace) {
+    return []
+  }
+
+  const presetPrefix = parsed.args[0]?.toLowerCase() ?? ''
+  const commandName = parsed.command === 'approvals' ? 'approvals' : 'permissions'
+
+  return EXECUTION_MODE_COMMAND_PRESET_VALUES
+    .filter((preset) => preset.startsWith(presetPrefix))
+    .map((preset) => ({
+      id: `permissions:${preset}`,
+      kind: 'permissions',
+      label: preset,
+      description: EXECUTION_MODE_PRESET_SUGGESTION_DESCRIPTIONS[preset],
+      insertText: `/${commandName} ${preset} `,
+      disabled: !isExecutionModePresetAllowed(preset, requirements),
+    }))
+}
+
+function buildLiveSlashSuggestions(
+  text: string,
+  options: ModelOption[],
+  requirements: ExecutionModeRequirements,
+): SlashSuggestionItem[] {
+  const parsed = parseLiveSlashInput(text)
+  if (!parsed) {
+    return []
+  }
+
+  if (parsed.rawCommand.length === 0 || parsed.rawAfterCommand.length === 0) {
+    const commandPrefix = parsed.command
+    return SLASH_COMMAND_LIST
+      .filter((command) => command.startsWith(commandPrefix))
+      .map((command) => ({
+        id: `command:${command}`,
+        kind: 'command',
+        label: `/${command}`,
+        description: SLASH_COMMAND_SUGGESTION_DESCRIPTIONS[command],
+        insertText: `/${command} `,
+      }))
+  }
+
+  if (parsed.command === 'model') {
+    return buildModelSlashSuggestions(parsed, options)
+  }
+
+  if (parsed.command === 'permissions' || parsed.command === 'approvals') {
+    return buildPermissionsSlashSuggestions(parsed, requirements)
+  }
+
+  return []
 }
 
 function isExecutionModePresetAllowed(
@@ -916,6 +1096,8 @@ export function useBridgeClient() {
   const isExecutionModeSaving = ref(false)
   const isSlashModelPickerOpen = ref(false)
   const isSlashPermissionsPickerOpen = ref(false)
+  const activeSlashSuggestionIndex = ref(-1)
+  const slashSuggestionsDismissedForInput = ref('')
   const quickStartInProgress = ref(false)
   const userGuidance = ref<UserGuidance | null>(null)
   const bridgeCwd = ref('')
@@ -1036,6 +1218,14 @@ export function useBridgeClient() {
   const isConnected = computed(() => connectionState.value === 'connected')
   const isTurnActive = computed(() => turnStatus.value === 'inProgress')
   const pendingSlashCommand = computed(() => parseSlashCommandInput(messageInput.value))
+  const slashSuggestions = computed<SlashSuggestionItem[]>(() =>
+    buildLiveSlashSuggestions(messageInput.value, modelOptions.value, executionModeRequirements.value),
+  )
+  const slashSuggestionsOpen = computed(
+    () =>
+      slashSuggestions.value.length > 0 &&
+      slashSuggestionsDismissedForInput.value !== messageInput.value,
+  )
   const canStartThread = computed(() => isConnected.value && initialized.value)
   const canResumeThread = computed(
     () => isConnected.value && initialized.value && resumeThreadId.value.trim().length > 0,
@@ -1180,6 +1370,36 @@ export function useBridgeClient() {
     () => {
       recomputeCodexAppHistoryEntries()
     },
+  )
+  watch(
+    () => messageInput.value,
+    (nextValue, previousValue) => {
+      if (nextValue !== previousValue && slashSuggestionsDismissedForInput.value !== nextValue) {
+        slashSuggestionsDismissedForInput.value = ''
+      }
+    },
+  )
+  watch(
+    () => slashSuggestions.value,
+    (nextSuggestions, previousSuggestions) => {
+      const previousIds = (previousSuggestions ?? []).map((item) => item.id).join('|')
+      const nextIds = nextSuggestions.map((item) => item.id).join('|')
+      if (previousIds !== nextIds) {
+        activeSlashSuggestionIndex.value = firstEnabledSlashSuggestionIndex(nextSuggestions)
+        return
+      }
+
+      if (activeSlashSuggestionIndex.value < 0 || activeSlashSuggestionIndex.value >= nextSuggestions.length) {
+        activeSlashSuggestionIndex.value = firstEnabledSlashSuggestionIndex(nextSuggestions)
+        return
+      }
+
+      const activeSuggestion = nextSuggestions[activeSlashSuggestionIndex.value]
+      if (activeSuggestion?.disabled) {
+        activeSlashSuggestionIndex.value = firstEnabledSlashSuggestionIndex(nextSuggestions)
+      }
+    },
+    { immediate: true },
   )
   const historyResumeSuccessRate = computed(() =>
     historyResumeAttemptCount.value === 0
@@ -3410,6 +3630,57 @@ function parseToolUserInputQuestions(params: Record<string, unknown>): ToolUserI
     return `Unsupported command usage: /${command}`
   }
 
+  function closeSlashSuggestions(): void {
+    slashSuggestionsDismissedForInput.value = messageInput.value
+  }
+
+  function moveSlashSuggestionSelection(direction: SlashSuggestionDirection): void {
+    if (!slashSuggestionsOpen.value || slashSuggestions.value.length === 0) {
+      return
+    }
+    activeSlashSuggestionIndex.value = getNextSlashSuggestionIndex(
+      slashSuggestions.value,
+      activeSlashSuggestionIndex.value,
+      direction,
+    )
+  }
+
+  function applySlashSuggestion(suggestion: SlashSuggestionItem): boolean {
+    if (suggestion.disabled) {
+      return false
+    }
+
+    messageInput.value = suggestion.insertText
+    slashSuggestionsDismissedForInput.value = suggestion.insertText
+    activeSlashSuggestionIndex.value = firstEnabledSlashSuggestionIndex(slashSuggestions.value)
+    return true
+  }
+
+  function commitActiveSlashSuggestion(): boolean {
+    if (!slashSuggestionsOpen.value || slashSuggestions.value.length === 0) {
+      return false
+    }
+
+    const currentIndex =
+      activeSlashSuggestionIndex.value >= 0 && activeSlashSuggestionIndex.value < slashSuggestions.value.length
+        ? activeSlashSuggestionIndex.value
+        : firstEnabledSlashSuggestionIndex(slashSuggestions.value)
+    const suggestion = slashSuggestions.value[currentIndex]
+    if (!suggestion || suggestion.disabled) {
+      return false
+    }
+
+    return applySlashSuggestion(suggestion)
+  }
+
+  function selectSlashSuggestionById(id: string): boolean {
+    const suggestion = slashSuggestions.value.find((entry) => entry.id === id)
+    if (!suggestion) {
+      return false
+    }
+    return applySlashSuggestion(suggestion)
+  }
+
   function isSlashCommandAvailableDuringTurn(command: SlashCommandName): boolean {
     return !SLASH_COMMAND_BLOCKED_DURING_TURN.has(command)
   }
@@ -4146,6 +4417,7 @@ function parseToolUserInputQuestions(params: Record<string, unknown>): ToolUserI
     isExecutionModeSaving,
     isSlashModelPickerOpen,
     isSlashPermissionsPickerOpen,
+    activeSlashSuggestionIndex,
     quickStartInProgress,
     userGuidance,
     historyDisplayMode,
@@ -4172,6 +4444,8 @@ function parseToolUserInputQuestions(params: Record<string, unknown>): ToolUserI
     canStartThread,
     canResumeThread,
     canSendMessage,
+    slashSuggestions,
+    slashSuggestionsOpen,
     canInterruptTurn,
     canReadSelectedHistoryThread,
     canQuickStartConversation,
@@ -4205,6 +4479,10 @@ function parseToolUserInputQuestions(params: Record<string, unknown>): ToolUserI
     loadConfig,
     setSelectedExecutionModePreset,
     saveExecutionModeConfig,
+    moveSlashSuggestionSelection,
+    commitActiveSlashSuggestion,
+    closeSlashSuggestions,
+    selectSlashSuggestionById,
     openSlashModelPicker,
     closeSlashModelPicker,
     selectSlashModelFromPicker,

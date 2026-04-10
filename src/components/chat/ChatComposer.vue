@@ -6,6 +6,7 @@ import type {
   ExecutionModeSelectablePreset,
   ModelOption,
   ReasoningEffort,
+  SlashSuggestionItem,
 } from '@/types'
 import { EXECUTION_MODE_SELECTABLE_PRESET_VALUES } from '@/types'
 
@@ -25,6 +26,9 @@ const props = defineProps<{
   selectedExecutionModePreset: ExecutionModePreset
   executionModeRequirements: ExecutionModeRequirements
   executionModeSaving: boolean
+  slashSuggestionsOpen: boolean
+  slashSuggestions: SlashSuggestionItem[]
+  activeSlashSuggestionIndex: number
 }>()
 
 const emit = defineEmits<{
@@ -33,6 +37,10 @@ const emit = defineEmits<{
   'update:selectedThinkingEffort': [value: string]
   'update:selectedExecutionModePreset': [value: ExecutionModePreset]
   saveExecutionModeConfig: []
+  slashMoveSelection: [direction: 'up' | 'down']
+  slashCommitSelection: []
+  slashCloseSuggestions: []
+  slashSelectSuggestion: [id: string]
   send: []
   interrupt: []
 }>()
@@ -70,9 +78,69 @@ function onEnterKeydown(event: KeyboardEvent) {
   }
 
   event.preventDefault()
+  if (props.slashSuggestionsOpen && hasEnabledSlashSuggestions()) {
+    emit('slashCommitSelection')
+    return
+  }
   if (props.canSend) {
     emit('send')
   }
+}
+
+function hasEnabledSlashSuggestions(): boolean {
+  return props.slashSuggestions.some((suggestion) => suggestion.disabled !== true)
+}
+
+function onKeydown(event: KeyboardEvent): void {
+  if (isImeComposing.value || event.isComposing || event.keyCode === 229) {
+    return
+  }
+  if (!props.slashSuggestionsOpen || props.slashSuggestions.length === 0) {
+    return
+  }
+
+  if (event.key === 'ArrowDown') {
+    event.preventDefault()
+    emit('slashMoveSelection', 'down')
+    return
+  }
+  if (event.key === 'ArrowUp') {
+    event.preventDefault()
+    emit('slashMoveSelection', 'up')
+    return
+  }
+  if (event.key === 'Tab') {
+    if (hasEnabledSlashSuggestions()) {
+      event.preventDefault()
+      emit('slashCommitSelection')
+      return
+    }
+    emit('slashCloseSuggestions')
+    return
+  }
+  if (event.key === 'Escape') {
+    event.preventDefault()
+    emit('slashCloseSuggestions')
+  }
+}
+
+function isActiveSlashSuggestion(index: number): boolean {
+  return index === props.activeSlashSuggestionIndex
+}
+
+function getSlashSuggestionOptionId(index: number): string {
+  return `slash-suggestion-option-${index}`
+}
+
+function onSlashSuggestionMouseDown(event: MouseEvent): void {
+  event.preventDefault()
+}
+
+function onSlashSuggestionClick(id: string): void {
+  emit('slashSelectSuggestion', id)
+  void nextTick(() => {
+    textareaRef.value?.focus()
+  })
 }
 
 function onModelChange(event: Event) {
@@ -199,10 +267,18 @@ onMounted(async () => {
             rows="1"
             placeholder="Codex にメッセージを送信..."
             :disabled="props.disabled"
+            :aria-expanded="props.slashSuggestionsOpen ? 'true' : 'false'"
+            :aria-controls="'slash-suggestions-listbox'"
+            :aria-activedescendant="
+              props.slashSuggestionsOpen && props.activeSlashSuggestionIndex >= 0
+                ? getSlashSuggestionOptionId(props.activeSlashSuggestionIndex)
+                : undefined
+            "
             class="min-h-[40px] flex-1 resize-none border-none bg-transparent px-1 py-1 text-base leading-relaxed text-text-primary placeholder:text-text-muted focus:outline-none disabled:cursor-not-allowed disabled:text-text-muted"
             @input="onInput"
             @compositionstart="onCompositionStart"
             @compositionend="onCompositionEnd"
+            @keydown="onKeydown"
             @keydown.enter.exact="onEnterKeydown"
           />
           <button
@@ -228,6 +304,32 @@ onMounted(async () => {
               <path d="M12 5v14" />
               <path d="m6 11 6-6 6 6" />
             </svg>
+          </button>
+        </div>
+        <div
+          v-if="props.slashSuggestionsOpen && props.slashSuggestions.length > 0"
+          id="slash-suggestions-listbox"
+          data-testid="slash-suggestions"
+          class="mt-1 max-h-56 overflow-y-auto rounded-xl border border-border-default/70 bg-surface/95 p-1 shadow-lg"
+          role="listbox"
+        >
+          <button
+            v-for="(option, index) in props.slashSuggestions"
+            :id="getSlashSuggestionOptionId(index)"
+            :key="option.id"
+            type="button"
+            role="option"
+            :aria-selected="isActiveSlashSuggestion(index) ? 'true' : 'false'"
+            :disabled="option.disabled"
+            class="flex w-full flex-col items-start gap-0.5 rounded-lg px-2 py-1.5 text-left transition-colors hover:bg-surface-secondary disabled:cursor-not-allowed disabled:opacity-40"
+            :class="isActiveSlashSuggestion(index) ? 'bg-surface-secondary' : ''"
+            :data-testid="`slash-suggestion-option-${index}`"
+            :data-active="isActiveSlashSuggestion(index) ? 'true' : 'false'"
+            @mousedown="onSlashSuggestionMouseDown"
+            @click="onSlashSuggestionClick(option.id)"
+          >
+            <span class="text-xs font-medium text-text-primary">{{ option.label }}</span>
+            <span v-if="option.description" class="text-[11px] text-text-secondary">{{ option.description }}</span>
           </button>
         </div>
         <!-- Parameters row -->

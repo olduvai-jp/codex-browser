@@ -5,7 +5,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest'
 
 import { useBridgeClient } from '../useBridgeClient'
 import { INIT_PROMPT_FOR_SLASH_COMMAND } from '@/lib/initPromptForSlashCommand'
-import type { ModelOption, ReasoningEffort } from '@/types'
+import type { ExecutionModeRequirements, ModelOption, ReasoningEffort, SlashSuggestionItem } from '@/types'
 
 const bridgeMock = vi.hoisted(() => {
   type RequestHandler = (method: string, params: unknown) => unknown | Promise<unknown>
@@ -1483,6 +1483,110 @@ describe('useBridgeClient slash commands', () => {
       role: 'system',
     })
     expect(vm.messages[vm.messages.length - 1]?.text).toContain("unknown slash command '/does-not-exist'")
+
+    wrapper.unmount()
+  })
+
+  it('provides command suggestions while typing top-level slash commands', async () => {
+    const wrapper = mount(HostComponent)
+    const vm = wrapper.vm as unknown as {
+      messageInput: string
+      slashSuggestionsOpen: boolean
+      slashSuggestions: SlashSuggestionItem[]
+    }
+
+    vm.messageInput = '/'
+    await flushPromises()
+    expect(vm.slashSuggestionsOpen).toBe(true)
+    expect(vm.slashSuggestions.map((item) => item.label)).toContain('/model')
+
+    vm.messageInput = '/mo'
+    await flushPromises()
+    expect(vm.slashSuggestionsOpen).toBe(true)
+    expect(vm.slashSuggestions).toHaveLength(1)
+    expect(vm.slashSuggestions[0]?.label).toBe('/model')
+
+    wrapper.unmount()
+  })
+
+  it('suggests /model first argument and commits selection into the input', async () => {
+    const wrapper = mount(HostComponent)
+    const vm = wrapper.vm as unknown as {
+      messageInput: string
+      modelOptions: ModelOption[]
+      slashSuggestionsOpen: boolean
+      slashSuggestions: SlashSuggestionItem[]
+      activeSlashSuggestionIndex: number
+      commitActiveSlashSuggestion: () => boolean
+      moveSlashSuggestionSelection: (direction: 'up' | 'down') => void
+    }
+
+    vm.modelOptions = [
+      {
+        id: 'gpt-4o-mini',
+        label: 'GPT 4o Mini',
+        supportedReasoningEfforts: ['low', 'medium', 'high'],
+      },
+      {
+        id: 'o4-mini',
+        label: 'o4-mini',
+      },
+    ]
+    vm.messageInput = '/model gp'
+    await flushPromises()
+
+    expect(vm.slashSuggestionsOpen).toBe(true)
+    expect(vm.slashSuggestions).toHaveLength(1)
+    expect(vm.slashSuggestions[0]?.id).toBe('model:gpt-4o-mini')
+    expect(vm.activeSlashSuggestionIndex).toBe(0)
+
+    vm.moveSlashSuggestionSelection('down')
+    expect(vm.activeSlashSuggestionIndex).toBe(0)
+
+    expect(vm.commitActiveSlashSuggestion()).toBe(true)
+    expect(vm.messageInput).toBe('/model gpt-4o-mini ')
+    expect(vm.slashSuggestionsOpen).toBe(false)
+
+    vm.messageInput = '/model gpt-4o-mini x'
+    await flushPromises()
+    expect(vm.slashSuggestionsOpen).toBe(false)
+
+    wrapper.unmount()
+  })
+
+  it('suggests /approvals first argument with requirement-aware disabled presets', async () => {
+    const wrapper = mount(HostComponent)
+    const vm = wrapper.vm as unknown as {
+      messageInput: string
+      slashSuggestionsOpen: boolean
+      slashSuggestions: SlashSuggestionItem[]
+      executionModeRequirements: ExecutionModeRequirements
+      selectSlashSuggestionById: (id: string) => boolean
+      closeSlashSuggestions: () => void
+    }
+
+    vm.executionModeRequirements = {
+      allowedApprovalPolicies: ['on-request'],
+      allowedSandboxModes: ['workspace-write'],
+    }
+    vm.messageInput = '/approvals '
+    await flushPromises()
+
+    expect(vm.slashSuggestionsOpen).toBe(true)
+    expect(vm.slashSuggestions.map((item) => item.label)).toEqual(['read-only', 'auto', 'full-access'])
+    expect(vm.slashSuggestions.find((item) => item.id === 'permissions:read-only')?.disabled).toBe(true)
+    expect(vm.slashSuggestions.find((item) => item.id === 'permissions:auto')?.disabled).toBe(false)
+    expect(vm.slashSuggestions.find((item) => item.id === 'permissions:full-access')?.disabled).toBe(true)
+
+    expect(vm.selectSlashSuggestionById('permissions:auto')).toBe(true)
+    expect(vm.messageInput).toBe('/approvals auto ')
+    expect(vm.slashSuggestionsOpen).toBe(false)
+
+    vm.closeSlashSuggestions()
+    expect(vm.slashSuggestionsOpen).toBe(false)
+    vm.messageInput = '/approvals a'
+    await flushPromises()
+    expect(vm.slashSuggestionsOpen).toBe(true)
 
     wrapper.unmount()
   })

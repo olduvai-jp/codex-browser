@@ -40,6 +40,7 @@ const {
   isExecutionModeSaving,
   isSlashModelPickerOpen,
   isSlashPermissionsPickerOpen,
+  activeSlashSuggestionIndex,
   toolUserInputRequests,
   approvals,
   timelineItems,
@@ -53,6 +54,8 @@ const {
   canStartThread,
   canResumeThread,
   canSendMessage,
+  slashSuggestions,
+  slashSuggestionsOpen,
   canInterruptTurn,
   historyCanLoadMore,
   currentToolUserInputRequest,
@@ -79,6 +82,10 @@ const {
   setSelectedThinkingEffort,
   setSelectedExecutionModePreset,
   saveExecutionModeConfig,
+  moveSlashSuggestionSelection,
+  commitActiveSlashSuggestion,
+  closeSlashSuggestions,
+  selectSlashSuggestionById,
   closeSlashModelPicker,
   selectSlashModelFromPicker,
   closeSlashPermissionsPicker,
@@ -254,11 +261,18 @@ onMounted(() => {
         :selected-execution-mode-preset="selectedExecutionModePreset"
         :execution-mode-requirements="executionModeRequirements"
         :execution-mode-saving="isExecutionModeSaving"
+        :slash-suggestions-open="slashSuggestionsOpen"
+        :slash-suggestions="slashSuggestions"
+        :active-slash-suggestion-index="activeSlashSuggestionIndex"
         @update:model-value="messageInput = $event"
         @update:selected-model-id="setSelectedModelId"
         @update:selected-thinking-effort="setSelectedThinkingEffort"
         @update:selected-execution-mode-preset="setSelectedExecutionModePreset"
         @save-execution-mode-config="saveExecutionModeConfig"
+        @slash-move-selection="moveSlashSuggestionSelection"
+        @slash-commit-selection="commitActiveSlashSuggestion"
+        @slash-close-suggestions="closeSlashSuggestions"
+        @slash-select-suggestion="selectSlashSuggestionById"
         @send="sendTurn"
         @interrupt="interruptTurn"
       />

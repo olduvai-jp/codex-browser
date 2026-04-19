@@ -3,6 +3,7 @@ import { describe, expect, it, vi } from 'vitest'
 
 import ChatComposer from './ChatComposer.vue'
 import type {
+  CollaborationModeListEntry,
   ExecutionModePreset,
   ExecutionModeRequirements,
   ReasoningEffort,
@@ -20,6 +21,8 @@ function mountComposer(overrides: Partial<{
   modelOptions: Array<{ id: string; label: string }>
   selectedModelId: string
   selectedThinkingEffort: ReasoningEffort | ''
+  selectedCollaborationMode: 'default' | 'plan'
+  collaborationModes: CollaborationModeListEntry[]
   thinkingOptions: ReasoningEffort[]
   currentExecutionModePreset: ExecutionModePreset
   selectedExecutionModePreset: ExecutionModePreset
@@ -44,6 +47,11 @@ function mountComposer(overrides: Partial<{
       ],
       selectedModelId: '',
       selectedThinkingEffort: '',
+      selectedCollaborationMode: 'default',
+      collaborationModes: [
+        { name: 'Default', mode: 'default', model: 'gpt-4o-mini', reasoningEffort: 'medium' },
+        { name: 'Plan', mode: 'plan', model: 'o3-mini', reasoningEffort: 'high' },
+      ],
       thinkingOptions: ['none', 'minimal', 'low', 'medium', 'high', 'xhigh'],
       currentExecutionModePreset: 'default',
       selectedExecutionModePreset: 'default',
@@ -195,9 +203,22 @@ describe('ChatComposer', () => {
 
     await wrapper.get('select[data-testid="model-select"]').setValue('gpt-4o-mini')
     await wrapper.get('select[data-testid="thinking-effort-select"]').setValue('high')
+    await wrapper.get('select[data-testid="collaboration-mode-select"]').setValue('plan')
 
     expect(wrapper.emitted('update:selectedModelId')).toEqual([['gpt-4o-mini']])
     expect(wrapper.emitted('update:selectedThinkingEffort')).toEqual([['high']])
+    expect(wrapper.emitted('update:selectedCollaborationMode')).toEqual([['plan']])
+  })
+
+  it('disables unavailable collaboration mode options when collaboration modes are loaded', () => {
+    const wrapper = mountComposer({
+      collaborationModes: [{ name: 'Default', mode: 'default', model: 'gpt-4o-mini', reasoningEffort: 'medium' }],
+    })
+
+    const planOption = wrapper
+      .get('select[data-testid="collaboration-mode-select"]')
+      .find('option[value="plan"]')
+    expect(planOption.attributes('disabled')).toBeDefined()
   })
 
   it('emits execution mode selection and save action', async () => {

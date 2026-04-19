@@ -15,8 +15,24 @@ export const REASONING_EFFORT_VALUES = [
   'xhigh',
 ] as const
 export type ReasoningEffort = (typeof REASONING_EFFORT_VALUES)[number]
+export type CollaborationModeKind = 'default' | 'plan'
+export type CollaborationModeSettings = {
+  model: string
+  reasoningEffort: ReasoningEffort
+  developerInstructions: string | null
+}
+export type CollaborationMode = {
+  mode: CollaborationModeKind
+  settings: CollaborationModeSettings
+}
+export type CollaborationModeListEntry = {
+  name: string
+  mode: CollaborationModeKind
+  model: string
+  reasoningEffort: ReasoningEffort
+}
 
-export type SlashSuggestionKind = 'command' | 'model' | 'permissions'
+export type SlashSuggestionKind = 'command' | 'model' | 'permissions' | 'mode'
 export type SlashSuggestionItem = {
   id: string
   kind: SlashSuggestionKind
@@ -124,7 +140,7 @@ export type ToolUserInputQuestion = {
 
 export type ToolUserInputRequest = {
   id: JsonRpcId
-  method: 'item/tool/requestUserInput'
+  method: 'item/tool/requestUserInput' | 'item/tool/request_user_input' | 'request_user_input'
   callId?: string
   turnId?: string
   toolName: string
@@ -139,7 +155,7 @@ export type TimelineToolUserInputState = 'pending' | 'submitted' | 'cancelled'
 
 export type TimelineItemBase = {
   id: string
-  kind: 'message' | 'tool' | 'turnStatus' | 'approval' | 'toolUserInput'
+  kind: 'message' | 'tool' | 'turnStatus' | 'approval' | 'toolUserInput' | 'plan'
   timelineSequence: number
 }
 
@@ -187,12 +203,22 @@ export type TimelineToolUserInputItem = TimelineItemBase & {
   answers?: Record<string, { answers: string[] }>
 }
 
+export type TimelinePlanItem = TimelineItemBase & {
+  kind: 'plan'
+  turnId?: string
+  itemId?: string
+  text: string
+  streaming: boolean
+  updatedAt: string
+}
+
 export type TimelineItem =
   | TimelineMessageItem
   | TimelineToolItem
   | TimelineTurnStatusItem
   | TimelineApprovalItem
   | TimelineToolUserInputItem
+  | TimelinePlanItem
 
 export type ThreadHistoryEntry = {
   id: string

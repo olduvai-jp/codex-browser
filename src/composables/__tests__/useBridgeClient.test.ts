@@ -113,6 +113,41 @@ describe('useBridgeClient connect', () => {
     wrapper.unmount()
   })
 
+  it('sends experimentalApi capability in initialize request', async () => {
+    bridgeMock.setRequestHandler(async (method) => {
+      if (method === 'initialize') {
+        return { userAgent: 'mock-codex-agent' }
+      }
+      if (method === 'collaborationMode/list') {
+        return { data: [] }
+      }
+      if (method === 'model/list') {
+        return { models: [] }
+      }
+      return {}
+    })
+
+    const wrapper = mount(HostComponent)
+    const vm = wrapper.vm as unknown as {
+      connect: () => Promise<void>
+    }
+
+    await vm.connect()
+    await flushPromises()
+
+    expect(bridgeMock.getRequestCalls().find((call) => call.method === 'initialize')?.params).toEqual({
+      clientInfo: {
+        name: 'vue-codex-client',
+        version: '0.1.0',
+      },
+      capabilities: {
+        experimentalApi: true,
+      },
+    })
+
+    wrapper.unmount()
+  })
+
   it('normalizes selected thinking effort to model default when switching to an unsupported model', () => {
     const wrapper = mount(HostComponent)
     const vm = wrapper.vm as unknown as BridgeClientVm
@@ -1503,8 +1538,7 @@ describe('useBridgeClient slash commands', () => {
     vm.messageInput = '/mo'
     await flushPromises()
     expect(vm.slashSuggestionsOpen).toBe(true)
-    expect(vm.slashSuggestions).toHaveLength(1)
-    expect(vm.slashSuggestions[0]?.label).toBe('/model')
+    expect(vm.slashSuggestions.map((item) => item.label)).toEqual(['/model', '/mode'])
 
     wrapper.unmount()
   })
@@ -2060,6 +2094,550 @@ describe('useBridgeClient slash commands', () => {
       ],
     })
     expect(vm.messages.find((message) => message.role === 'user' && message.text === INIT_PROMPT_FOR_SLASH_COMMAND)).toBeUndefined()
+
+    wrapper.unmount()
+  })
+})
+
+describe('useBridgeClient collaboration mode and plan timeline', () => {
+  beforeEach(() => {
+    bridgeMock.reset()
+    vi.unstubAllGlobals()
+  })
+
+  it('loads collaborationMode/list and normalizes default/plan entries', async () => {
+    bridgeMock.setRequestHandler(async (method) => {
+      if (method === 'initialize') {
+        return { userAgent: 'mock-codex-agent' }
+      }
+      if (method === 'collaborationMode/list') {
+        return {
+          data: [
+            { name: 'Default', mode: 'default_mode', model: 'gpt-4o-mini', reasoning_effort: 'low' },
+            { name: 'Plan', mode: 'plan', model: 'o3-mini', reasoning_effort: 'high' },
+            { name: 'Ignore', mode: 'other_mode', model: 'x', reasoning_effort: 'medium' },
+          ],
+        }
+      }
+      if (method === 'model/list') {
+        return { models: [] }
+      }
+      throw new Error(`Unexpected method: ${method}`)
+    })
+
+    const wrapper = mount(HostComponent)
+    const vm = wrapper.vm as unknown as {
+      connect: () => Promise<void>
+      collaborationModes: Array<{ mode: string; model: string; reasoningEffort: string }>
+      selectedCollaborationMode: string
+    }
+
+    await vm.connect()
+    await flushPromises()
+
+    expect(vm.collaborationModes).toEqual([
+      { name: 'Default', mode: 'default', model: 'gpt-4o-mini', reasoningEffort: 'low' },
+      { name: 'Plan', mode: 'plan', model: 'o3-mini', reasoningEffort: 'high' },
+    ])
+    expect(vm.selectedCollaborationMode).toBe('default')
+
+    wrapper.unmount()
+  })
+
+  it('supports /mode slash command and includes collaborationMode in turn/start payload', async () => {
+    let threadStartCount = 0
+    bridgeMock.setRequestHandler(async (method) => {
+      if (method === 'initialize') {
+        return { userAgent: 'mock-codex-agent' }
+      }
+      if (method === 'collaborationMode/list') {
+        return {
+          data: [
+            { name: 'Default', mode: 'default', model: 'gpt-4o-mini', reasoning_effort: 'medium' },
+            { name: 'Plan', mode: 'plan', model: 'o3-mini', reasoning_effort: 'high' },
+          ],
+        }
+      }
+      if (method === 'model/list') {
+        return { models: [] }
+      }
+      if (method === 'thread/start') {
+        threadStartCount += 1
+        return { thread: { id: `thread-mode-${threadStartCount}` } }
+      }
+      if (method === 'turn/start') {
+        return { turn: { id: 'turn-mode-1' } }
+      }
+      throw new Error(`Unexpected method: ${method}`)
+    })
+
+    const wrapper = mount(HostComponent)
+    const vm = wrapper.vm as unknown as {
+      connect: () => Promise<void>
+      startThread: () => Promise<void>
+      sendTurn: () => Promise<void>
+      setSelectedCollaborationMode: (value: string) => void
+      selectedCollaborationMode: string
+      messageInput: string
+      messages: Array<{ text: string }>
+    }
+
+    await vm.connect()
+    await flushPromises()
+
+    await vm.startThread()
+    await flushPromises()
+
+    vm.messageInput = '/mode plan'
+    await vm.sendTurn()
+    await flushPromises()
+    expect(vm.selectedCollaborationMode).toBe('plan')
+
+    vm.messageInput = '/mode'
+    await vm.sendTurn()
+    await flushPromises()
+    expect(vm.messages[vm.messages.length - 1]?.text).toContain('Current mode: plan')
+
+    vm.messageInput = 'Use plan mode'
+    await vm.sendTurn()
+    await flushPromises()
+
+    const turnStartCall = bridgeMock.getRequestCalls().find((call) => call.method === 'turn/start')
+    expect(turnStartCall?.params).toMatchObject({
+      collaborationMode: {
+        mode: 'plan',
+        settings: {
+          model: 'o3-mini',
+          reasoning_effort: 'high',
+          developer_instructions: null,
+        },
+      },
+    })
+    expect(Object.keys(turnStartCall?.params as Record<string, unknown>)).not.toContain('collaboration_mode')
+
+    vm.setSelectedCollaborationMode('plan')
+    await vm.startThread()
+    await flushPromises()
+    expect(vm.selectedCollaborationMode).toBe('default')
+
+    wrapper.unmount()
+  })
+
+  it('uses configured model for plan mode when collaboration mode preset has no model', async () => {
+    bridgeMock.setRequestHandler(async (method) => {
+      if (method === 'initialize') {
+        return { userAgent: 'mock-codex-agent' }
+      }
+      if (method === 'collaborationMode/list') {
+        return {
+          data: [
+            { name: 'Default', mode: 'default', model: null, reasoning_effort: 'medium' },
+            { name: 'Plan', mode: 'plan', model: null, reasoning_effort: 'high' },
+          ],
+        }
+      }
+      if (method === 'model/list') {
+        return { models: [] }
+      }
+      if (method === 'thread/start') {
+        return { thread: { id: 'thread-mode-config-model-1' } }
+      }
+      if (method === 'config/read') {
+        return {
+          result: {
+            values: {
+              model: 'gpt-5.3-codex',
+            },
+          },
+        }
+      }
+      if (method === 'configRequirements/read') {
+        return {
+          requirements: {
+            allowedApprovalPolicies: ['on-request'],
+            allowedSandboxModes: ['workspace-write'],
+          },
+        }
+      }
+      if (method === 'turn/start') {
+        return { turn: { id: 'turn-mode-config-model-1' } }
+      }
+      throw new Error(`Unexpected method: ${method}`)
+    })
+
+    const wrapper = mount(HostComponent)
+    const vm = wrapper.vm as unknown as {
+      connect: () => Promise<void>
+      startThread: () => Promise<void>
+      sendTurn: () => Promise<void>
+      messageInput: string
+    }
+
+    await vm.connect()
+    await flushPromises()
+    await vm.startThread()
+    await flushPromises()
+
+    vm.messageInput = '/mode plan'
+    await vm.sendTurn()
+    await flushPromises()
+
+    vm.messageInput = 'Use configured model in plan mode'
+    await vm.sendTurn()
+    await flushPromises()
+
+    const turnStartCall = bridgeMock.getRequestCalls().find((call) => call.method === 'turn/start')
+    expect(turnStartCall?.params).toMatchObject({
+      collaborationMode: {
+        mode: 'plan',
+        settings: {
+          model: 'gpt-5.3-codex',
+          reasoning_effort: 'high',
+          developer_instructions: null,
+        },
+      },
+    })
+    expect(JSON.stringify(turnStartCall?.params)).not.toContain('"model":""')
+
+    wrapper.unmount()
+  })
+
+  it('uses selected model for plan mode when collaboration mode preset has no model', async () => {
+    bridgeMock.setRequestHandler(async (method) => {
+      if (method === 'initialize') {
+        return { userAgent: 'mock-codex-agent' }
+      }
+      if (method === 'collaborationMode/list') {
+        return {
+          data: [
+            { name: 'Default', mode: 'default', model: null, reasoning_effort: 'medium' },
+            { name: 'Plan', mode: 'plan', model: null, reasoning_effort: 'high' },
+          ],
+        }
+      }
+      if (method === 'model/list') {
+        return {
+          models: [
+            {
+              id: 'gpt-5.4-codex',
+              name: 'GPT 5.4 Codex',
+              isServerDefault: true,
+            },
+          ],
+        }
+      }
+      if (method === 'thread/start') {
+        return { thread: { id: 'thread-mode-selected-model-1' } }
+      }
+      if (method === 'turn/start') {
+        return { turn: { id: 'turn-mode-selected-model-1' } }
+      }
+      throw new Error(`Unexpected method: ${method}`)
+    })
+
+    const wrapper = mount(HostComponent)
+    const vm = wrapper.vm as unknown as {
+      connect: () => Promise<void>
+      startThread: () => Promise<void>
+      sendTurn: () => Promise<void>
+      messageInput: string
+    }
+
+    await vm.connect()
+    await flushPromises()
+    await vm.startThread()
+    await flushPromises()
+
+    vm.messageInput = '/mode plan'
+    await vm.sendTurn()
+    await flushPromises()
+
+    vm.messageInput = 'Use selected model in plan mode'
+    await vm.sendTurn()
+    await flushPromises()
+
+    const turnStartCall = bridgeMock.getRequestCalls().find((call) => call.method === 'turn/start')
+    expect(turnStartCall?.params).toMatchObject({
+      model: 'gpt-5.4-codex',
+      collaborationMode: {
+        mode: 'plan',
+        settings: {
+          model: 'gpt-5.4-codex',
+          reasoning_effort: 'high',
+          developer_instructions: null,
+        },
+      },
+    })
+    expect(JSON.stringify(turnStartCall?.params)).not.toContain('"model":""')
+
+    wrapper.unmount()
+  })
+
+  it('blocks plan mode locally when no non-empty model can be resolved', async () => {
+    bridgeMock.setRequestHandler(async (method) => {
+      if (method === 'initialize') {
+        return { userAgent: 'mock-codex-agent' }
+      }
+      if (method === 'collaborationMode/list') {
+        return {
+          data: [
+            { name: 'Default', mode: 'default', model: null, reasoning_effort: 'medium' },
+            { name: 'Plan', mode: 'plan', model: null, reasoning_effort: 'high' },
+          ],
+        }
+      }
+      if (method === 'model/list') {
+        return { models: [] }
+      }
+      if (method === 'thread/start') {
+        return { thread: { id: 'thread-mode-missing-model-1' } }
+      }
+      if (method === 'config/read') {
+        return {
+          result: {
+            values: {},
+          },
+        }
+      }
+      if (method === 'configRequirements/read') {
+        return {
+          requirements: {
+            allowedApprovalPolicies: ['on-request'],
+            allowedSandboxModes: ['workspace-write'],
+          },
+        }
+      }
+      throw new Error(`Unexpected method: ${method}`)
+    })
+
+    const wrapper = mount(HostComponent)
+    const vm = wrapper.vm as unknown as {
+      connect: () => Promise<void>
+      startThread: () => Promise<void>
+      sendTurn: () => Promise<void>
+      messageInput: string
+      userGuidance: { text: string } | null
+      messages: Array<{ role: string; text: string }>
+    }
+
+    await vm.connect()
+    await flushPromises()
+    await vm.startThread()
+    await flushPromises()
+
+    vm.messageInput = '/mode plan'
+    await vm.sendTurn()
+    await flushPromises()
+
+    vm.messageInput = 'Cannot start plan mode without model'
+    await vm.sendTurn()
+    await flushPromises()
+
+    expect(bridgeMock.getRequestCalls().filter((call) => call.method === 'turn/start')).toHaveLength(0)
+    expect(vm.userGuidance?.text).toContain('モデルが未確定です')
+    expect(vm.messages[vm.messages.length - 1]?.text).toContain('モデルが未確定です')
+
+    wrapper.unmount()
+  })
+
+  it('keeps selected collaboration mode when thread/start fails', async () => {
+    bridgeMock.setRequestHandler(async (method) => {
+      if (method === 'initialize') {
+        return { userAgent: 'mock-codex-agent' }
+      }
+      if (method === 'collaborationMode/list') {
+        return {
+          data: [
+            { name: 'Default', mode: 'default', model: 'gpt-4o-mini', reasoning_effort: 'medium' },
+            { name: 'Plan', mode: 'plan', model: 'o3-mini', reasoning_effort: 'high' },
+          ],
+        }
+      }
+      if (method === 'model/list') {
+        return { models: [] }
+      }
+      if (method === 'thread/start') {
+        throw new Error('thread start offline')
+      }
+      throw new Error(`Unexpected method: ${method}`)
+    })
+
+    const wrapper = mount(HostComponent)
+    const vm = wrapper.vm as unknown as {
+      connect: () => Promise<void>
+      startThread: () => Promise<void>
+      setSelectedCollaborationMode: (value: string) => void
+      selectedCollaborationMode: string
+      activeThreadId: string
+      userGuidance: { text: string } | null
+    }
+
+    await vm.connect()
+    await flushPromises()
+
+    vm.setSelectedCollaborationMode('plan')
+    expect(vm.selectedCollaborationMode).toBe('plan')
+
+    await vm.startThread()
+    await flushPromises()
+
+    expect(vm.selectedCollaborationMode).toBe('plan')
+    expect(vm.activeThreadId).toBe('')
+    expect(vm.userGuidance?.text).toContain('新しい会話の作成に失敗しました')
+
+    wrapper.unmount()
+  })
+
+  it('renders plan timeline deltas and accepts request_user_input aliases', async () => {
+    bridgeMock.setRequestHandler(async (method) => {
+      if (method === 'initialize') {
+        return { userAgent: 'mock-codex-agent' }
+      }
+      if (method === 'model/list') {
+        return { models: [] }
+      }
+      throw new Error(`Unexpected method: ${method}`)
+    })
+
+    const wrapper = mount(HostComponent)
+    const vm = wrapper.vm as unknown as {
+      connect: () => Promise<void>
+      timelineItems: Array<{ kind: string; text?: string; streaming?: boolean }>
+      toolUserInputRequests: Array<{ id: string | number; method: string }>
+    }
+
+    await vm.connect()
+    await flushPromises()
+
+    getClientInstance().emitMessage({
+      method: 'item/started',
+      params: {
+        turnId: 'turn-plan-1',
+        item: {
+          id: 'item-plan-1',
+          type: 'plan',
+        },
+      },
+    })
+    getClientInstance().emitMessage({
+      method: 'item/plan/delta',
+      params: {
+        turnId: 'turn-plan-1',
+        itemId: 'item-plan-1',
+        delta: 'step 1',
+      },
+    })
+    getClientInstance().emitMessage({
+      method: 'item/plan/delta',
+      params: {
+        turnId: 'turn-plan-1',
+        itemId: 'item-plan-1',
+        delta: { text: ' step 2' },
+      },
+    })
+    getClientInstance().emitMessage({
+      method: 'item/completed',
+      params: {
+        turnId: 'turn-plan-1',
+        item: {
+          id: 'item-plan-1',
+          type: 'plan',
+        },
+      },
+    })
+    await flushPromises()
+
+    const planItem = vm.timelineItems.find((entry) => entry.kind === 'plan')
+    expect(planItem).toBeDefined()
+    expect(planItem?.text).toContain('step 1')
+    expect(planItem?.text).toContain('"text": " step 2"')
+    expect(planItem?.streaming).toBe(false)
+
+    getClientInstance().emitMessage({
+      id: 'tool-input-alias-1',
+      method: 'item/tool/request_user_input',
+      params: {
+        tool: 'alias_tool',
+        questions: [{ id: 'q1', label: 'Q1' }],
+      },
+    })
+    getClientInstance().emitMessage({
+      id: 'tool-input-alias-2',
+      method: 'request_user_input',
+      params: {
+        tool: 'alias_tool_2',
+        questions: [{ id: 'q2', label: 'Q2' }],
+      },
+    })
+    await flushPromises()
+
+    expect(vm.toolUserInputRequests.map((entry) => String(entry.id))).toEqual([
+      'tool-input-alias-1',
+      'tool-input-alias-2',
+    ])
+    expect(vm.toolUserInputRequests.map((entry) => entry.method)).toEqual([
+      'item/tool/request_user_input',
+      'request_user_input',
+    ])
+
+    wrapper.unmount()
+  })
+
+  it('surfaces server turn errors in guidance, system messages, and turn timeline', async () => {
+    bridgeMock.setRequestHandler(async (method) => {
+      if (method === 'initialize') {
+        return { userAgent: 'mock-codex-agent' }
+      }
+      if (method === 'model/list') {
+        return { models: [] }
+      }
+      throw new Error(`Unexpected method: ${method}`)
+    })
+
+    const wrapper = mount(HostComponent)
+    const vm = wrapper.vm as unknown as {
+      connect: () => Promise<void>
+      userGuidance: { tone: string; text: string } | null
+      messages: Array<{ role: string; text: string }>
+      timelineItems: Array<{ kind: string; label?: string; status?: string }>
+    }
+
+    await vm.connect()
+    await flushPromises()
+
+    getClientInstance().emitMessage({
+      method: 'error',
+      params: {
+        threadId: 'thread-plan-error-1',
+        turnId: 'turn-plan-error-1',
+        willRetry: false,
+        error: {
+          message: 'Plan mode failed while strengthening logs',
+          additionalDetails: 'model returned an invalid tool request',
+        },
+      },
+    })
+    getClientInstance().emitMessage({
+      method: 'turn/completed',
+      params: {
+        turn: {
+          id: 'turn-plan-error-1',
+          status: 'failed',
+          error: {
+            message: 'Plan mode failed while strengthening logs',
+            additionalDetails: 'model returned an invalid tool request',
+          },
+        },
+      },
+    })
+    await flushPromises()
+
+    expect(vm.userGuidance?.tone).toBe('error')
+    expect(vm.userGuidance?.text).toContain('Plan mode failed while strengthening logs')
+    expect(vm.messages.filter((entry) => entry.text.includes('Plan mode failed while strengthening logs'))).toHaveLength(1)
+    const failedTurnItem = vm.timelineItems.find((entry) => entry.kind === 'turnStatus' && entry.status === 'failed')
+    expect(failedTurnItem?.label).toContain('Plan mode failed while strengthening logs')
+    expect(failedTurnItem?.label).toContain('model returned an invalid tool request')
 
     wrapper.unmount()
   })

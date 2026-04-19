@@ -268,4 +268,58 @@ describe('ConversationTimeline', () => {
 
     expect(scrollControl.scrollTo).toHaveBeenCalled()
   })
+
+  it('renders plan timeline entries with streaming and completed states', async () => {
+    const wrapper = mountTimeline([
+      {
+        id: 'plan-1',
+        kind: 'plan',
+        timelineSequence: 1,
+        turnId: 'turn-1',
+        itemId: 'item-plan-1',
+        text: 'step 1\nstep 2',
+        streaming: true,
+        updatedAt: '2026-01-01T00:00:00.000Z',
+      },
+    ])
+
+    expect(wrapper.find('[data-testid="timeline-plan-state"]').text()).toContain('計画中...')
+    expect(wrapper.text()).toContain('step 1')
+
+    await wrapper.setProps({
+      timelineItems: [
+        {
+          id: 'plan-1',
+          kind: 'plan',
+          timelineSequence: 1,
+          turnId: 'turn-1',
+          itemId: 'item-plan-1',
+          text: 'step 1\nstep 2\ndone',
+          streaming: false,
+          updatedAt: '2026-01-01T00:00:01.000Z',
+        },
+      ],
+    })
+    await nextTick()
+
+    expect(wrapper.find('[data-testid="timeline-plan-state"]').text()).toContain('完了')
+    expect(wrapper.text()).toContain('done')
+  })
+
+  it('renders failed turn status details when provided', () => {
+    const wrapper = mountTimeline([
+      {
+        id: 'turn-status-1',
+        kind: 'turnStatus',
+        timelineSequence: 1,
+        turnId: 'turn-error-1',
+        status: 'failed',
+        label: '応答処理で問題が発生しました: Plan mode failed while strengthening logs',
+        occurredAt: '2026-01-01T00:00:00.000Z',
+      },
+    ])
+
+    expect(wrapper.text()).toContain('Plan mode failed while strengthening logs')
+    expect(wrapper.text()).not.toContain('Turn turn-error-1 completed with status')
+  })
 })

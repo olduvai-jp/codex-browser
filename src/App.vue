@@ -28,6 +28,8 @@ const {
   modelOptions,
   selectedModelId,
   selectedThinkingEffort,
+  collaborationModes,
+  selectedCollaborationMode,
   configSnapshot,
   userGuidance,
   historyDisplayMode,
@@ -80,6 +82,7 @@ const {
   interruptTurn,
   setSelectedModelId,
   setSelectedThinkingEffort,
+  setSelectedCollaborationMode,
   setSelectedExecutionModePreset,
   saveExecutionModeConfig,
   moveSlashSuggestionSelection,
@@ -256,6 +259,8 @@ onMounted(() => {
         :model-options="modelOptions"
         :selected-model-id="selectedModelId"
         :selected-thinking-effort="selectedThinkingEffort"
+        :selected-collaboration-mode="selectedCollaborationMode"
+        :collaboration-modes="collaborationModes"
         :thinking-options="availableThinkingEfforts"
         :current-execution-mode-preset="executionModeCurrentPreset"
         :selected-execution-mode-preset="selectedExecutionModePreset"
@@ -267,6 +272,7 @@ onMounted(() => {
         @update:model-value="messageInput = $event"
         @update:selected-model-id="setSelectedModelId"
         @update:selected-thinking-effort="setSelectedThinkingEffort"
+        @update:selected-collaboration-mode="setSelectedCollaborationMode"
         @update:selected-execution-mode-preset="setSelectedExecutionModePreset"
         @save-execution-mode-config="saveExecutionModeConfig"
         @slash-move-selection="moveSlashSuggestionSelection"

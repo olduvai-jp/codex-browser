@@ -481,7 +481,7 @@ describe('App.vue ui phase-1 flows', () => {
       .getRequestCalls()
       .find((call) => call.method === 'turn/start')
     expect(turnStartCall).toBeDefined()
-    expect(turnStartCall?.params).toEqual({
+    expect(turnStartCall?.params).toMatchObject({
       threadId: 'thread-phase2',
       input: [
         {
@@ -491,6 +491,7 @@ describe('App.vue ui phase-1 flows', () => {
         },
       ],
     })
+    expect((turnStartCall?.params as Record<string, unknown>).collaborationMode).toBeUndefined()
 
     client.emitMessage({
       method: 'item/started',
@@ -1346,7 +1347,7 @@ describe('App.vue ui phase-1 flows', () => {
 
     const turnStartCall = findRequestCall('turn/start')
     expect(turnStartCall).toBeDefined()
-    expect(turnStartCall?.params).toEqual({
+    expect(turnStartCall?.params).toMatchObject({
       threadId: 'thread-history-1',
       input: [
         {
@@ -1356,6 +1357,7 @@ describe('App.vue ui phase-1 flows', () => {
         },
       ],
     })
+    expect((turnStartCall?.params as Record<string, unknown>).collaborationMode).toBeUndefined()
     expect(wrapper.text()).toContain('ターン ID: turn-history-send-1')
 
     wrapper.unmount()
@@ -2082,7 +2084,7 @@ describe('App.vue ui phase-1 flows', () => {
 
     const turnStartCall = findRequestCall('turn/start')
     expect(turnStartCall).toBeDefined()
-    expect(turnStartCall?.params).toEqual({
+    expect(turnStartCall?.params).toMatchObject({
       threadId: 'thread-model-1',
       input: [
         {
@@ -2093,6 +2095,9 @@ describe('App.vue ui phase-1 flows', () => {
       ],
       model: 'gpt-4o-mini',
       effort: 'high',
+      collaborationMode: {
+        mode: 'default',
+      },
     })
 
     wrapper.unmount()
@@ -2199,7 +2204,7 @@ describe('App.vue ui phase-1 flows', () => {
 
     const turnStartCall = findRequestCall('turn/start')
     expect(turnStartCall).toBeDefined()
-    expect(turnStartCall?.params).toEqual({
+    expect(turnStartCall?.params).toMatchObject({
       threadId: 'thread-model-default-effort-1',
       input: [
         {
@@ -2209,7 +2214,108 @@ describe('App.vue ui phase-1 flows', () => {
         },
       ],
       model: 'gpt-4o-mini',
+      collaborationMode: {
+        mode: 'default',
+      },
     })
+
+    wrapper.unmount()
+  })
+
+  it('wires collaboration mode select and /mode to turn/start payload, then resets on new thread', async () => {
+    let threadStartCount = 0
+    let turnStartCount = 0
+    bridgeMock.setRequestHandler(async (method) => {
+      if (method === 'initialize') {
+        return { userAgent: 'mock-codex-agent' }
+      }
+      if (method === 'collaborationMode/list') {
+        return {
+          data: [
+            { name: 'Default', mode: 'default', model: 'gpt-4o-mini', reasoning_effort: 'medium' },
+            { name: 'Plan', mode: 'plan', model: 'o3-mini', reasoning_effort: 'high' },
+          ],
+        }
+      }
+      if (method === 'model/list') {
+        return { models: [] }
+      }
+      if (method === 'thread/start') {
+        threadStartCount += 1
+        return { thread: { id: `thread-collab-${threadStartCount}` } }
+      }
+      if (method === 'turn/start') {
+        turnStartCount += 1
+        return { turn: { id: `turn-collab-${turnStartCount}` } }
+      }
+
+      throw new Error(`Unexpected method: ${method}`)
+    })
+
+    const wrapper = mount(App)
+    const client = await connectAndInitialize(wrapper)
+    await openAdvancedPanel(wrapper)
+    await getByTestId(wrapper, 'start-thread-button').trigger('click')
+    await flushPromises()
+
+    await getByTestId(wrapper, 'collaboration-mode-select').setValue('plan')
+    await wrapper.get('textarea').setValue('Run with plan mode')
+    await wrapper.get('form').trigger('submit')
+    await flushPromises()
+
+    const firstTurnStartCall = bridgeMock.getRequestCalls().filter((call) => call.method === 'turn/start')[0]
+    expect(firstTurnStartCall?.params).toMatchObject({
+      collaborationMode: {
+        mode: 'plan',
+        settings: {
+          model: 'o3-mini',
+          reasoning_effort: 'high',
+        },
+      },
+    })
+
+    client.emitMessage({
+      method: 'turn/completed',
+      params: {
+        turn: {
+          id: 'turn-collab-1',
+          status: 'completed',
+        },
+      },
+    })
+    await flushPromises()
+
+    await wrapper.get('textarea').setValue('/mode default')
+    await wrapper.get('form').trigger('submit')
+    await flushPromises()
+    expect(getTimelineText(wrapper)).toContain('Collaboration mode updated: default')
+
+    await wrapper.get('textarea').setValue('Run with default mode')
+    await wrapper.get('form').trigger('submit')
+    await flushPromises()
+    const secondTurnStartCall = bridgeMock.getRequestCalls().filter((call) => call.method === 'turn/start')[1]
+    expect(secondTurnStartCall?.params).toMatchObject({
+      collaborationMode: {
+        mode: 'default',
+      },
+    })
+
+    client.emitMessage({
+      method: 'turn/completed',
+      params: {
+        turn: {
+          id: 'turn-collab-2',
+          status: 'completed',
+        },
+      },
+    })
+    await flushPromises()
+
+    await getByTestId(wrapper, 'start-thread-button').trigger('click')
+    await flushPromises()
+    expect((wrapper.get('select[data-testid="collaboration-mode-select"]').element as HTMLSelectElement).value).toBe(
+      'default',
+    )
 
     wrapper.unmount()
   })
@@ -3220,6 +3326,83 @@ describe('App.vue ui phase-1 flows', () => {
     })
     expect(wrapper.find('.tool-input-backdrop').exists()).toBe(false)
     expect(wrapper.text()).toContain('completed')
+
+    wrapper.unmount()
+  })
+
+  it('renders plan timeline and routes item/tool/request_user_input through ToolUserInputModal', async () => {
+    bridgeMock.setRequestHandler(async (method) => {
+      if (method === 'initialize') {
+        return { userAgent: 'mock-codex-agent' }
+      }
+      throw new Error(`Unexpected method: ${method}`)
+    })
+
+    const wrapper = mount(App)
+    const client = await connectAndInitialize(wrapper)
+
+    client.emitMessage({
+      method: 'item/started',
+      params: {
+        turnId: 'turn-plan-app-1',
+        item: {
+          id: 'item-plan-app-1',
+          type: 'plan',
+        },
+      },
+    })
+    client.emitMessage({
+      method: 'item/plan/delta',
+      params: {
+        turnId: 'turn-plan-app-1',
+        itemId: 'item-plan-app-1',
+        delta: 'collect context',
+      },
+    })
+    client.emitMessage({
+      method: 'item/completed',
+      params: {
+        turnId: 'turn-plan-app-1',
+        item: {
+          id: 'item-plan-app-1',
+          type: 'plan',
+        },
+      },
+    })
+    await flushPromises()
+
+    expect(getTimelineKinds(wrapper)).toContain('plan')
+    expect(wrapper.text()).toContain('collect context')
+    expect(wrapper.find('[data-testid="timeline-plan-state"]').text()).toContain('完了')
+
+    client.emitMessage({
+      id: 'tool-input-snake-1',
+      method: 'item/tool/request_user_input',
+      params: {
+        turnId: 'turn-tool-input-snake-1',
+        callId: 'call-tool-input-snake-1',
+        tool: 'snake_case_tool',
+        questions: [
+          {
+            questionId: 'q_reason',
+            label: 'Reason',
+          },
+        ],
+      },
+    })
+    await flushPromises()
+
+    expect(wrapper.find('.tool-input-backdrop').exists()).toBe(true)
+    await getByTestId(wrapper, 'tool-user-input-field-q_reason').setValue('Need details')
+    await getByTestId(wrapper, 'tool-user-input-submit').trigger('click')
+    await flushPromises()
+
+    expect(client.respond).toHaveBeenCalledWith('tool-input-snake-1', {
+      answers: {
+        q_reason: { answers: ['Need details'] },
+      },
+    })
+    expect(wrapper.find('.tool-input-backdrop').exists()).toBe(false)
 
     wrapper.unmount()
   })

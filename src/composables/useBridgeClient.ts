@@ -27,6 +27,8 @@ import {
   SANDBOX_MODE_VALUES,
   type SlashSuggestionItem,
   type ApprovalPolicy,
+  type CollaborationModeKind,
+  type CollaborationModeListEntry,
   type ExecutionModeConfig,
   type ExecutionModePreset,
   type ExecutionModeSelectablePreset,
@@ -47,6 +49,7 @@ import type {
   WorkspaceHistoryGroup,
   TimelineApprovalItem,
   TimelineItem,
+  TimelinePlanItem,
   TimelineToolUserInputItem,
   TimelineToolUserInputState,
   TimelineTurnStatusItem,
@@ -83,12 +86,17 @@ const FULL_ACCESS_APPROVAL_POLICY: ApprovalPolicy = 'never'
 const FULL_ACCESS_SANDBOX_MODE: SandboxMode = 'danger-full-access'
 const QUICK_START_CONNECT_POLL_INTERVAL_MS = 25
 const QUICK_START_CONNECT_WAIT_TIMEOUT_MS = 5_000
+const COLLABORATION_MODE_VALUES: CollaborationModeKind[] = ['default', 'plan']
+const COLLABORATION_MODE_SET = new Set<CollaborationModeKind>(COLLABORATION_MODE_VALUES)
+const DEFAULT_COLLABORATION_MODE: CollaborationModeKind = 'default'
+const DEFAULT_COLLABORATION_MODE_REASONING_EFFORT: ReasoningEffort = 'medium'
 
 type ToolItemType = 'commandExecution' | 'fileChange' | 'mcpToolCall'
 type ToolUserInputAnswers = Record<string, { answers: string[] }>
 type TimelineTurnStatusEntry = Omit<TimelineTurnStatusItem, 'kind'>
 type TimelineApprovalEntry = Omit<TimelineApprovalItem, 'kind'>
 type TimelineToolUserInputEntry = Omit<TimelineToolUserInputItem, 'kind'>
+type TimelinePlanEntry = Omit<TimelinePlanItem, 'kind'>
 type CodexAppHistoryUpsertPayload = {
   threadId: string
   title: string
@@ -99,7 +107,7 @@ type CodexAppOverlayEntry = ThreadHistoryEntry & {
   updatedAt: string
   scopeCwd?: string
 }
-type SlashCommandName = 'model' | 'permissions' | 'approvals' | 'status' | 'diff' | 'clear' | 'init'
+type SlashCommandName = 'model' | 'permissions' | 'approvals' | 'mode' | 'status' | 'diff' | 'clear' | 'init'
 type ParsedSlashCommand = {
   command: string
   rawCommand: string
@@ -582,6 +590,7 @@ const SLASH_COMMAND_LIST: SlashCommandName[] = [
   'model',
   'permissions',
   'approvals',
+  'mode',
   'status',
   'diff',
   'clear',
@@ -592,6 +601,7 @@ const SLASH_COMMAND_BLOCKED_DURING_TURN = new Set<SlashCommandName>([
   'model',
   'permissions',
   'approvals',
+  'mode',
   'clear',
   'init',
 ])
@@ -599,6 +609,7 @@ const SLASH_COMMAND_SUGGESTION_DESCRIPTIONS: Record<SlashCommandName, string> = 
   model: 'Switch model: /model <model-id> [effort]',
   permissions: 'Set execution preset: /permissions <read-only|auto|full-access>',
   approvals: 'Alias of /permissions',
+  mode: 'Set collaboration mode: /mode <default|plan>',
   status: 'Show current session status',
   diff: 'Show working-tree diff',
   clear: 'Start a new conversation',
@@ -621,6 +632,119 @@ function isExecutionModeSelectablePreset(value: ExecutionModePreset): value is E
 
 function isExecutionModeSelectablePresetValue(value: string): value is ExecutionModeSelectablePreset {
   return EXECUTION_MODE_COMMAND_PRESET_VALUES.includes(value as ExecutionModeSelectablePreset)
+}
+
+function normalizeCollaborationModeKind(value: unknown): CollaborationModeKind | null {
+  if (typeof value !== 'string') {
+    return null
+  }
+
+  const normalized = value.trim().toLowerCase()
+  if (normalized === 'default' || normalized === 'default_mode') {
+    return 'default'
+  }
+  if (normalized === 'plan' || normalized === 'plan_mode') {
+    return 'plan'
+  }
+
+  return null
+}
+
+function isCollaborationModeKind(value: string): value is CollaborationModeKind {
+  return COLLABORATION_MODE_SET.has(value as CollaborationModeKind)
+}
+
+function parseCollaborationModeListEntry(value: unknown): CollaborationModeListEntry | null {
+  if (!isRecord(value)) {
+    return null
+  }
+
+  const mode = normalizeCollaborationModeKind(value.mode)
+  if (!mode) {
+    return null
+  }
+  const name = pickStringValue(value, ['name']) ?? mode
+  const model = pickStringValue(value, ['model']) ?? ''
+  const reasoningEffortRaw =
+    pickStringValue(value, ['reasoningEffort', 'reasoning_effort']) ??
+    DEFAULT_COLLABORATION_MODE_REASONING_EFFORT
+  const reasoningEffort = isReasoningEffort(reasoningEffortRaw)
+    ? reasoningEffortRaw
+    : DEFAULT_COLLABORATION_MODE_REASONING_EFFORT
+
+  return {
+    name,
+    mode,
+    model,
+    reasoningEffort,
+  }
+}
+
+function extractConfiguredModel(payload: unknown): string {
+  if (!isRecord(payload)) {
+    return ''
+  }
+
+  const candidates: Record<string, unknown>[] = [payload]
+  if (isRecord(payload.config)) {
+    candidates.push(payload.config)
+  }
+  if (isRecord(payload.values)) {
+    candidates.push(payload.values)
+  }
+  if (isRecord(payload.data)) {
+    candidates.push(payload.data)
+  }
+  if (isRecord(payload.result)) {
+    candidates.push(payload.result)
+    if (isRecord(payload.result.config)) {
+      candidates.push(payload.result.config)
+    }
+    if (isRecord(payload.result.values)) {
+      candidates.push(payload.result.values)
+    }
+  }
+
+  for (const candidate of candidates) {
+    const model = pickStringValue(candidate, [
+      'model',
+      'modelId',
+      'model_id',
+      'defaultModel',
+      'default_model',
+    ])
+    if (model && model.length > 0) {
+      return model
+    }
+  }
+
+  return ''
+}
+
+function parseCollaborationModeList(payload: unknown): CollaborationModeListEntry[] {
+  if (!isRecord(payload)) {
+    return []
+  }
+
+  const rawData = Array.isArray(payload.data)
+    ? payload.data
+    : (isRecord(payload.result) && Array.isArray(payload.result.data)
+      ? payload.result.data
+      : [])
+  const byMode = new Map<CollaborationModeKind, CollaborationModeListEntry>()
+  for (const rawEntry of rawData) {
+    const entry = parseCollaborationModeListEntry(rawEntry)
+    if (!entry) {
+      continue
+    }
+    if (!byMode.has(entry.mode)) {
+      byMode.set(entry.mode, entry)
+    }
+  }
+
+  return COLLABORATION_MODE_VALUES
+    .map((mode) => byMode.get(mode))
+    .filter((entry): entry is CollaborationModeListEntry => entry != null)
 }
 
 function isSlashCommandName(value: string): value is SlashCommandName {
@@ -775,10 +899,37 @@ function buildPermissionsSlashSuggestions(
     }))
 }
 
+function buildModeSlashSuggestions(
+  parsed: ParsedLiveSlashInput,
+  collaborationModes: CollaborationModeListEntry[],
+): SlashSuggestionItem[] {
+  if (parsed.args.length >= 2) {
+    return []
+  }
+  if (parsed.args.length === 1 && parsed.hasTrailingWhitespace) {
+    return []
+  }
+
+  const modePrefix = parsed.args[0]?.toLowerCase() ?? ''
+  const availableModeSet = new Set(collaborationModes.map((entry) => entry.mode))
+  const shouldDisableUnavailable = availableModeSet.size > 0
+  return COLLABORATION_MODE_VALUES
+    .filter((mode) => mode.startsWith(modePrefix))
+    .map((mode) => ({
+      id: `mode:${mode}`,
+      kind: 'mode',
+      label: mode,
+      description: mode === 'plan' ? 'Plan mode (planning-oriented collaboration)' : 'Default collaboration',
+      insertText: `/mode ${mode} `,
+      disabled: shouldDisableUnavailable && !availableModeSet.has(mode),
+    }))
+}
+
 function buildLiveSlashSuggestions(
   text: string,
   options: ModelOption[],
   requirements: ExecutionModeRequirements,
+  collaborationModes: CollaborationModeListEntry[],
 ): SlashSuggestionItem[] {
   const parsed = parseLiveSlashInput(text)
   if (!parsed) {
@@ -804,6 +955,9 @@ function buildLiveSlashSuggestions(
 
   if (parsed.command === 'permissions' || parsed.command === 'approvals') {
     return buildPermissionsSlashSuggestions(parsed, requirements)
+  }
+  if (parsed.command === 'mode') {
+    return buildModeSlashSuggestions(parsed, collaborationModes)
   }
 
   return []
@@ -1087,6 +1241,8 @@ export function useBridgeClient() {
   const modelOptions = ref<ModelOption[]>([])
   const selectedModelId = ref('')
   const selectedThinkingEffort = ref<ReasoningEffort | ''>('')
+  const collaborationModes = ref<CollaborationModeListEntry[]>([])
+  const selectedCollaborationMode = ref<CollaborationModeKind>(DEFAULT_COLLABORATION_MODE)
   const configSnapshot = ref<unknown | null>(null)
   const executionModeConfig = ref<ExecutionModeConfig>({ approvalPolicy: '', sandboxMode: '' })
   const executionModeCurrentPreset = ref<ExecutionModePreset>(DEFAULT_EXECUTION_MODE_PRESET)
@@ -1123,6 +1279,7 @@ export function useBridgeClient() {
   const turnStatusTimeline = ref<TimelineTurnStatusEntry[]>([])
   const approvalTimeline = ref<TimelineApprovalEntry[]>([])
   const toolUserInputTimeline = ref<TimelineToolUserInputEntry[]>([])
+  const planTimeline = ref<TimelinePlanEntry[]>([])
   const appStartedAtMs = Date.now()
   const firstSendDurationMs = ref<number | null>(null)
   const historyResumeAttemptCount = ref(0)
@@ -1140,10 +1297,13 @@ export function useBridgeClient() {
   const approvalRequestedAtMsById = new Map<string, number>()
   const approvalTimelineEntryIdByMetricKey = new Map<string, string>()
   const toolUserInputTimelineEntryIdByRequestKey = new Map<string, string>()
+  const planTimelineEntryIdByLookupKey = new Map<string, string>()
   const toolCallEntryIdByLookupKey = new Map<string, string>()
   const codexAppPendingFirstTurnHistoryUpsertOverlayByThreadId = new Map<string, CodexAppOverlayEntry>()
   const tokenUsageByThreadId = new Map<string, ThreadTokenUsageSnapshot>()
   const turnDiffByTurnId = new Map<string, string>()
+  const turnErrorMessageByTurnId = new Map<string, string>()
+  const reportedTurnErrorByTurnId = new Set<string>()
 
   let uiMessageSequence = 1
   let logSequence = 1
@@ -1214,12 +1374,39 @@ export function useBridgeClient() {
       fallbackEffort && supportedEfforts.includes(fallbackEffort) ? fallbackEffort : ''
   }
 
+  function isCollaborationModeAvailable(mode: CollaborationModeKind): boolean {
+    if (collaborationModes.value.length === 0) {
+      return true
+    }
+    return collaborationModes.value.some((entry) => entry.mode === mode)
+  }
+
+  function getCollaborationModeListEntry(mode: CollaborationModeKind): CollaborationModeListEntry | null {
+    return collaborationModes.value.find((entry) => entry.mode === mode) ?? null
+  }
+
+  function setSelectedCollaborationMode(value: string): void {
+    const mode = normalizeCollaborationModeKind(value)
+    if (!mode) {
+      return
+    }
+    if (!isCollaborationModeAvailable(mode)) {
+      return
+    }
+    selectedCollaborationMode.value = mode
+  }
+
   // Computed
   const isConnected = computed(() => connectionState.value === 'connected')
   const isTurnActive = computed(() => turnStatus.value === 'inProgress')
   const pendingSlashCommand = computed(() => parseSlashCommandInput(messageInput.value))
   const slashSuggestions = computed<SlashSuggestionItem[]>(() =>
-    buildLiveSlashSuggestions(messageInput.value, modelOptions.value, executionModeRequirements.value),
+    buildLiveSlashSuggestions(
+      messageInput.value,
+      modelOptions.value,
+      executionModeRequirements.value,
+      collaborationModes.value,
+    ),
   )
   const slashSuggestionsOpen = computed(
     () =>
@@ -1343,6 +1530,12 @@ export function useBridgeClient() {
       items.push({
         ...entry,
         kind: 'toolUserInput',
+      })
+    }
+    for (const entry of planTimeline.value) {
+      items.push({
+        ...entry,
+        kind: 'plan',
       })
     }
 
@@ -1644,6 +1837,51 @@ export function useBridgeClient() {
     turnStatusTimeline.value.push(makeTurnStatusTimelineEntry(status, label, turnId, occurredAt))
   }
 
+  function extractTurnErrorMessage(error: unknown): string {
+    if (typeof error === 'string') {
+      return error.trim()
+    }
+    if (!isRecord(error)) {
+      return ''
+    }
+
+    const message = pickStringValue(error, ['message', 'error', 'detail', 'details'], { trim: false })?.trim() ?? ''
+    const additionalDetails =
+      pickStringValue(error, ['additionalDetails', 'additional_details'], { trim: false })?.trim() ?? ''
+
+    if (message.length > 0 && additionalDetails.length > 0 && !message.includes(additionalDetails)) {
+      return `${message}\n${additionalDetails}`
+    }
+    return message || additionalDetails
+  }
+
+  function rememberTurnErrorMessage(turnId: string, message: string): void {
+    const normalizedTurnId = normalizeTurnId(turnId)
+    if (!normalizedTurnId || message.trim().length === 0) {
+      return
+    }
+    turnErrorMessageByTurnId.set(normalizedTurnId, message.trim())
+  }
+
+  function reportTurnErrorToUser(turnId: string, message: string): void {
+    const normalizedTurnId = normalizeTurnId(turnId)
+    const normalizedMessage = message.trim()
+    if (normalizedMessage.length === 0) {
+      return
+    }
+
+    setUserGuidance('error', `応答処理で問題が発生しました。詳細: ${normalizedMessage}`)
+    if (!normalizedTurnId) {
+      addSystemMessage(`エラー: ${normalizedMessage}`)
+      return
+    }
+    if (reportedTurnErrorByTurnId.has(normalizedTurnId)) {
+      return
+    }
+    reportedTurnErrorByTurnId.add(normalizedTurnId)
+    addSystemMessage(`エラー: ${normalizedMessage}`)
+  }
+
   function addApprovalTimelineEntry(
     approval: ApprovalRequest,
     requestedAtMs: number,
@@ -1760,6 +1998,76 @@ export function useBridgeClient() {
       resolvedAt,
       answers,
     })
+  }
+
+  function buildPlanTimelineLookupKeys(itemId?: string, turnId?: string): string[] {
+    const keys: string[] = []
+    const normalizedItemId = itemId?.trim() ?? ''
+    if (normalizedItemId.length === 0) {
+      return keys
+    }
+    const normalizedTurnId = turnId?.trim() ?? ''
+    if (normalizedTurnId.length > 0) {
+      keys.push(`plan:turn:${normalizedTurnId}:item:${normalizedItemId}`)
+    }
+    keys.push(`plan:item:${normalizedItemId}`)
+    return keys
+  }
+
+  function registerPlanTimelineLookupKeys(entry: TimelinePlanEntry): void {
+    const keys = buildPlanTimelineLookupKeys(entry.itemId, entry.turnId)
+    for (const key of keys) {
+      planTimelineEntryIdByLookupKey.set(key, entry.id)
+    }
+  }
+
+  function getPlanTimelineEntry(itemId?: string, turnId?: string): TimelinePlanEntry | null {
+    const keys = buildPlanTimelineLookupKeys(itemId, turnId)
+    for (const key of keys) {
+      const entryId = planTimelineEntryIdByLookupKey.get(key)
+      if (!entryId) {
+        continue
+      }
+      const entry = planTimeline.value.find((candidate) => candidate.id === entryId) ?? null
+      if (entry) {
+        return entry
+      }
+      planTimelineEntryIdByLookupKey.delete(key)
+    }
+    return null
+  }
+
+  function ensurePlanTimelineEntry(itemId?: string, turnId?: string, initialText = ''): TimelinePlanEntry {
+    const existing = getPlanTimelineEntry(itemId, turnId)
+    if (existing) {
+      if (typeof turnId === 'string' && turnId.trim().length > 0 && !existing.turnId) {
+        existing.turnId = turnId.trim()
+      }
+      if (typeof itemId === 'string' && itemId.trim().length > 0 && !existing.itemId) {
+        existing.itemId = itemId.trim()
+      }
+      if (initialText.length > 0 && existing.text.length === 0) {
+        existing.text = initialText
+      }
+      existing.streaming = true
+      existing.updatedAt = new Date().toISOString()
+      registerPlanTimelineLookupKeys(existing)
+      return existing
+    }
+
+    const sequence = nextTimelineSequence()
+    const entry: TimelinePlanEntry = {
+      id: `plan-${sequence}`,
+      timelineSequence: sequence,
+      turnId: turnId?.trim() || undefined,
+      itemId: itemId?.trim() || undefined,
+      text: initialText,
+      streaming: true,
+      updatedAt: new Date().toISOString(),
+    }
+    planTimeline.value.push(entry)
+    registerPlanTimelineLookupKeys(entry)
+    return entry
   }
 
   function pushLog(
@@ -2069,6 +2377,57 @@ function parseToolUserInputQuestions(params: Record<string, unknown>): ToolUserI
   ]
 }
 
+function isToolUserInputRequestMethod(method: string): method is ToolUserInputRequest['method'] {
+  return (
+    method === 'item/tool/requestUserInput' ||
+    method === 'item/tool/request_user_input' ||
+    method === 'request_user_input'
+  )
+}
+
+function parsePlanTextFromItem(item: Record<string, unknown>): string {
+  const directText = pickStringValue(item, ['text', 'plan', 'content', 'summary'], { trim: false })
+  if (typeof directText === 'string' && directText.length > 0) {
+    return directText
+  }
+
+  const content = item.content
+  if (typeof content === 'string' && content.length > 0) {
+    return content
+  }
+  if (Array.isArray(content)) {
+    const joined = content
+      .map((part) => {
+        if (typeof part === 'string') {
+          return part
+        }
+        if (!isRecord(part)) {
+          return ''
+        }
+        return pickStringValue(part, ['text', 'content', 'value'], { trim: false }) ?? stringifyDetails(part)
+      })
+      .join('')
+    if (joined.length > 0) {
+      return joined
+    }
+  }
+
+  return ''
+}
+
+function extractPlanDeltaText(params: Record<string, unknown>): string {
+  const directText = pickStringValue(params, ['delta', 'textDelta', 'text_delta', 'text', 'content'], {
+    trim: false,
+  })
+  if (typeof directText === 'string' && directText.length > 0) {
+    return directText
+  }
+
+  const candidate = params.delta ?? params.part ?? params.content ?? params
+  const serialized = stringifyDetails(candidate)
+  return serialized === 'undefined' ? '' : serialized
+}
+
   function normalizeTurnId(turnId?: string): string | null {
     if (typeof turnId !== 'string') {
       return null
@@ -2240,6 +2599,8 @@ function parseToolUserInputQuestions(params: Record<string, unknown>): ToolUserI
     reasoningSummaryByTurnId.clear()
     reasoningTurnIdByItemId.clear()
     turnDiffByTurnId.clear()
+    turnErrorMessageByTurnId.clear()
+    reportedTurnErrorByTurnId.clear()
     clearToolCalls()
     turnStatusTimeline.value = []
     approvals.value = []
@@ -2247,8 +2608,10 @@ function parseToolUserInputQuestions(params: Record<string, unknown>): ToolUserI
     approvalRequestedAtMsById.clear()
     approvalTimelineEntryIdByMetricKey.clear()
     toolUserInputTimelineEntryIdByRequestKey.clear()
+    planTimelineEntryIdByLookupKey.clear()
     approvalTimeline.value = []
     toolUserInputTimeline.value = []
+    planTimeline.value = []
     readPreviewThreadId.value = ''
     currentTurnId.value = ''
     turnStatus.value = 'idle'
@@ -2427,6 +2790,7 @@ function parseToolUserInputQuestions(params: Record<string, unknown>): ToolUserI
   function hydrateMessagesFromThread(thread: Record<string, unknown>): string | null {
     const turns = Array.isArray(thread.turns) ? thread.turns : []
     const hydratedMessages: UiMessage[] = []
+    const hydratedPlans: TimelinePlanEntry[] = []
     const newItemIndexMap = new Map<string, number>()
     const newAssistantAnswerByItemId = new Map<string, string>()
     const newReasoningSummaryByTurnId = new Map<string, string>()
@@ -2521,6 +2885,22 @@ function parseToolUserInputQuestions(params: Record<string, unknown>): ToolUserI
             newAssistantAnswerByItemId.set(itemId, answerText)
           }
         }
+
+        if (itemType === 'plan') {
+          const itemId = pickStringValue(item, ['id', 'itemId', 'item_id']) ?? undefined
+          const planText = parsePlanTextFromItem(item)
+          const sequence = nextTimelineSequence()
+          const planEntry: TimelinePlanEntry = {
+            id: `plan-${sequence}`,
+            timelineSequence: sequence,
+            turnId,
+            itemId,
+            text: planText,
+            streaming: false,
+            updatedAt: new Date().toISOString(),
+          }
+          hydratedPlans.push(planEntry)
+        }
       }
     }
 
@@ -2540,6 +2920,11 @@ function parseToolUserInputQuestions(params: Record<string, unknown>): ToolUserI
     reasoningTurnIdByItemId.clear()
     for (const [itemId, turnId] of newReasoningTurnIdByItemId.entries()) {
       reasoningTurnIdByItemId.set(itemId, turnId)
+    }
+    planTimelineEntryIdByLookupKey.clear()
+    planTimeline.value = hydratedPlans
+    for (const entry of hydratedPlans) {
+      registerPlanTimelineLookupKeys(entry)
     }
     return firstUserMessageText
   }
@@ -2647,15 +3032,15 @@ function parseToolUserInputQuestions(params: Record<string, unknown>): ToolUserI
       return
     }
 
-    if (method === 'item/tool/requestUserInput') {
+    if (isToolUserInputRequestMethod(method)) {
       const requestParams = isRecord(params) ? params : {}
-      const toolName = pickStringValue(requestParams, ['tool', 'toolName', 'name']) ?? 'tool/requestUserInput'
+      const toolName = pickStringValue(requestParams, ['tool', 'toolName', 'name']) ?? 'tool/request_user_input'
       const requestedAtMs = Date.now()
       const request: ToolUserInputRequest = {
         id,
-        method: 'item/tool/requestUserInput',
+        method,
         callId: pickStringValue(requestParams, ['callId', 'call_id']) ?? undefined,
-        turnId: pickStringValue(requestParams, ['turnId']) ?? undefined,
+        turnId: pickStringValue(requestParams, ['turnId', 'turn_id']) ?? undefined,
         toolName,
         questions: parseToolUserInputQuestions(requestParams),
         params: requestParams,
@@ -2730,15 +3115,36 @@ function parseToolUserInputQuestions(params: Record<string, unknown>): ToolUserI
         completedTurn.status === 'interrupted'
           ? completedTurn.status
           : 'completed'
+      const normalizedTurnId = normalizeTurnId(turnId)
+      const turnErrorMessage =
+        status === 'failed'
+          ? extractTurnErrorMessage(completedTurn.error) ||
+            (normalizedTurnId ? turnErrorMessageByTurnId.get(normalizedTurnId) ?? '' : '')
+          : ''
+      if (turnErrorMessage.length > 0) {
+        rememberTurnErrorMessage(turnId, turnErrorMessage)
+      }
+      const completedLabel =
+        status === 'failed' && turnErrorMessage.length > 0
+          ? `応答処理で問題が発生しました: ${turnErrorMessage}`
+          : `Turn ${turnId || '(unknown)'} completed with status: ${status}`
 
       currentTurnId.value = turnId
       turnStatus.value = status
       pushTurnStatusTimeline(
         status,
-        `Turn ${turnId || '(unknown)'} completed with status: ${status}`,
+        completedLabel,
         turnId || undefined,
       )
-      pushLog('rpc', status === 'completed' ? 'info' : 'warn', `Turn completed: ${status}`, params)
+      if (status === 'failed' && turnErrorMessage.length > 0) {
+        reportTurnErrorToUser(turnId, turnErrorMessage)
+      }
+      pushLog(
+        'rpc',
+        status === 'completed' ? 'info' : 'warn',
+        turnErrorMessage.length > 0 ? `Turn completed: ${status}: ${turnErrorMessage}` : `Turn completed: ${status}`,
+        params,
+      )
       return
     }
 
@@ -2788,6 +3194,11 @@ function parseToolUserInputQuestions(params: Record<string, unknown>): ToolUserI
       if (item.type === 'reasoning' && typeof item.id === 'string' && normalizedTurnId) {
         reasoningTurnIdByItemId.set(item.id, normalizedTurnId)
       }
+      if (item.type === 'plan') {
+        const itemId = pickStringValue(item, ['id', 'itemId', 'item_id']) ?? undefined
+        const initialText = parsePlanTextFromItem(item)
+        ensurePlanTimelineEntry(itemId, turnId, initialText)
+      }
 
       const toolItemType = normalizeToolItemType(item.type)
       if (toolItemType) {
@@ -2811,6 +3222,19 @@ function parseToolUserInputQuestions(params: Record<string, unknown>): ToolUserI
           turnId: turnId ?? null,
         })
       }
+      return
+    }
+
+    if (method === 'item/plan/delta' && isRecord(params)) {
+      const itemId = pickStringValue(params, ['itemId', 'item_id', 'id']) ?? undefined
+      const turnId = pickStringValue(params, ['turnId', 'turn_id']) ?? undefined
+      const deltaText = extractPlanDeltaText(params)
+      const entry = ensurePlanTimelineEntry(itemId, turnId)
+      if (deltaText.length > 0) {
+        entry.text += deltaText
+      }
+      entry.streaming = true
+      entry.updatedAt = new Date().toISOString()
       return
     }
 
@@ -2922,6 +3346,16 @@ function parseToolUserInputQuestions(params: Record<string, unknown>): ToolUserI
           appendReasoningSummary(resolvedTurnId, summaryText, true)
         }
       }
+      if (item.type === 'plan') {
+        const itemId = pickStringValue(item, ['id', 'itemId', 'item_id']) ?? undefined
+        const entry = ensurePlanTimelineEntry(itemId, turnId)
+        const completedText = parsePlanTextFromItem(item)
+        if (entry.text.length === 0 && completedText.length > 0) {
+          entry.text = completedText
+        }
+        entry.streaming = false
+        entry.updatedAt = new Date().toISOString()
+      }
 
       const toolItemType = normalizeToolItemType(item.type)
       if (toolItemType) {
@@ -2956,7 +3390,23 @@ function parseToolUserInputQuestions(params: Record<string, unknown>): ToolUserI
     }
 
     if (method === 'error') {
-      pushLog('rpc', 'error', 'Server error notification', params)
+      const errorMessage = isRecord(params) ? extractTurnErrorMessage(params.error) : ''
+      const turnId = isRecord(params) ? pickStringValue(params, ['turnId', 'turn_id']) ?? '' : ''
+      const willRetry = isRecord(params) && params.willRetry === true
+      if (errorMessage.length > 0) {
+        rememberTurnErrorMessage(turnId, errorMessage)
+        if (!willRetry) {
+          reportTurnErrorToUser(turnId, errorMessage)
+        }
+      }
+      pushLog(
+        'rpc',
+        willRetry ? 'warn' : 'error',
+        errorMessage.length > 0
+          ? `Server error notification${willRetry ? ' (retrying)' : ''}: ${errorMessage}`
+          : 'Server error notification',
+        params,
+      )
       return
     }
 
@@ -3010,9 +3460,12 @@ function parseToolUserInputQuestions(params: Record<string, unknown>): ToolUserI
     toolUserInputTimelineEntryIdByRequestKey.clear()
     approvalTimeline.value = []
     toolUserInputTimeline.value = []
+    planTimeline.value = []
     executionModeConfig.value = { approvalPolicy: '', sandboxMode: '' }
     executionModeCurrentPreset.value = DEFAULT_EXECUTION_MODE_PRESET
     selectedExecutionModePreset.value = DEFAULT_EXECUTION_MODE_PRESET
+    collaborationModes.value = []
+    selectedCollaborationMode.value = DEFAULT_COLLABORATION_MODE
     tokenUsageByThreadId.clear()
     turnDiffByTurnId.clear()
     executionModeRequirements.value = buildExecutionModeRequirementsDefault()
@@ -3025,7 +3478,26 @@ function parseToolUserInputQuestions(params: Record<string, unknown>): ToolUserI
     codexAppRoots.value = { activeRoots: [], savedRoots: [], labels: {} }
     codexAppHistoryGeneratedAt.value = ''
     codexAppPendingFirstTurnHistoryUpsertOverlayByThreadId.clear()
+    planTimelineEntryIdByLookupKey.clear()
     connectionState.value = 'disconnected'
+  }
+
+  async function loadCollaborationModeList(): Promise<void> {
+    if (!client.value || !isConnected.value || !initialized.value) {
+      return
+    }
+
+    try {
+      const response = await client.value.request('collaborationMode/list', {})
+      collaborationModes.value = parseCollaborationModeList(response)
+      if (!isCollaborationModeAvailable(selectedCollaborationMode.value)) {
+        selectedCollaborationMode.value = DEFAULT_COLLABORATION_MODE
+      }
+      pushLog('rpc', 'info', `collaborationMode/list completed (${collaborationModes.value.length} modes)`, response)
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error)
+      pushLog('rpc', 'warn', `collaborationMode/list failed: ${message}`)
+    }
   }
 
   async function connect(): Promise<void> {
@@ -3057,7 +3529,7 @@ function parseToolUserInputQuestions(params: Record<string, unknown>): ToolUserI
           version: '0.1.0',
         },
         capabilities: {
-          experimentalApi: false,
+          experimentalApi: true,
         },
       })
 
@@ -3068,6 +3540,7 @@ function parseToolUserInputQuestions(params: Record<string, unknown>): ToolUserI
       }
       initialized.value = true
       pushLog('rpc', 'info', 'initialize completed', initializeResult)
+      await loadCollaborationModeList()
       await loadModelList()
       clearUserGuidance()
     } catch (error) {
@@ -3192,6 +3665,7 @@ function parseToolUserInputQuestions(params: Record<string, unknown>): ToolUserI
 
       if (isRecord(response) && isRecord(response.thread) && typeof response.thread.id === 'string') {
         const nextThreadId = response.thread.id
+        selectedCollaborationMode.value = DEFAULT_COLLABORATION_MODE
         if (nextThreadId !== activeThreadId.value) {
           resetConversation()
         }
@@ -3530,7 +4004,43 @@ function parseToolUserInputQuestions(params: Record<string, unknown>): ToolUserI
     }
   }
 
+  function resolveCollaborationModeModel(listEntry: CollaborationModeListEntry | null): string {
+    const modeModel = listEntry?.model.trim() ?? ''
+    if (modeModel.length > 0) {
+      return modeModel
+    }
+    const selectedModel = selectedModelId.value.trim()
+    if (selectedModel.length > 0) {
+      return selectedModel
+    }
+    return extractConfiguredModel(configSnapshot.value)
+  }
+
+  function buildCollaborationModePayload(): Record<string, unknown> | null {
+    const mode = selectedCollaborationMode.value
+    const listEntry = getCollaborationModeListEntry(mode)
+    const model = resolveCollaborationModeModel(listEntry)
+    if (model.length === 0) {
+      return null
+    }
+    const selectedEffort = selectedThinkingEffort.value.trim()
+    const reasoningEffort = listEntry?.reasoningEffort
+      ?? (isReasoningEffort(selectedEffort)
+        ? selectedEffort
+        : DEFAULT_COLLABORATION_MODE_REASONING_EFFORT)
+
+    return {
+      mode,
+      settings: {
+        model,
+        reasoning_effort: reasoningEffort,
+        developer_instructions: null,
+      },
+    }
+  }
+
   function buildTurnStartPayload(threadId: string, text: string): Record<string, unknown> {
+    const collaborationModePayload = buildCollaborationModePayload()
     const payload: Record<string, unknown> = {
       threadId,
       input: [
@@ -3540,6 +4050,9 @@ function parseToolUserInputQuestions(params: Record<string, unknown>): ToolUserI
           text_elements: [],
         },
       ],
+    }
+    if (collaborationModePayload) {
+      payload.collaborationMode = collaborationModePayload
     }
     const modelId = selectedModelId.value.trim()
     turnStartCount.value += 1
@@ -3552,6 +4065,31 @@ function parseToolUserInputQuestions(params: Record<string, unknown>): ToolUserI
     }
 
     return payload
+  }
+
+  async function ensureCollaborationModeReadyForTurn(): Promise<boolean> {
+    if (selectedCollaborationMode.value === DEFAULT_COLLABORATION_MODE) {
+      return true
+    }
+    if (buildCollaborationModePayload()) {
+      return true
+    }
+
+    await loadModelList()
+    if (buildCollaborationModePayload()) {
+      return true
+    }
+
+    await loadConfig()
+    if (buildCollaborationModePayload()) {
+      return true
+    }
+
+    const message =
+      'Plan Mode を開始できません。モデルが未確定です。モデル一覧を再読み込みするか、`/model <model-id>` でモデルを選択してから再送してください。'
+    setUserGuidance('error', message)
+    addSystemMessage(`Error: ${message}`)
+    return false
   }
 
   async function applyTurnStartResponse(
@@ -3626,6 +4164,9 @@ function parseToolUserInputQuestions(params: Record<string, unknown>): ToolUserI
     }
     if (command === 'permissions' || command === 'approvals') {
       return 'Usage: /permissions <read-only|auto|full-access>'
+    }
+    if (command === 'mode') {
+      return 'Usage: /mode <default|plan>'
     }
     return `Unsupported command usage: /${command}`
   }
@@ -3801,6 +4342,30 @@ function parseToolUserInputQuestions(params: Record<string, unknown>): ToolUserI
     addSystemMessage(`Permissions updated: ${presetArg}`)
   }
 
+  async function handleSlashModeCommand(args: string[]): Promise<void> {
+    if (args.length === 0) {
+      addSystemMessage(`Current mode: ${selectedCollaborationMode.value}\n${buildSlashCommandUsageMessage('mode')}`)
+      return
+    }
+    if (args.length !== 1) {
+      addSystemMessage(`Error: ${buildSlashCommandUsageMessage('mode')}`)
+      return
+    }
+
+    const modeArg = args[0]?.trim().toLowerCase() ?? ''
+    if (!isCollaborationModeKind(modeArg)) {
+      addSystemMessage(`Error: invalid mode '${modeArg}'. ${buildSlashCommandUsageMessage('mode')}`)
+      return
+    }
+    if (!isCollaborationModeAvailable(modeArg)) {
+      addSystemMessage(`Error: mode '${modeArg}' is not available in this session.`)
+      return
+    }
+
+    selectedCollaborationMode.value = modeArg
+    addSystemMessage(`Collaboration mode updated: ${modeArg}`)
+  }
+
   async function handleSlashStatusCommand(): Promise<void> {
     addSystemMessage(formatStatusOutput())
   }
@@ -3920,6 +4485,10 @@ function parseToolUserInputQuestions(params: Record<string, unknown>): ToolUserI
       if (firstSendDurationMs.value === null) {
         firstSendDurationMs.value = Math.max(0, Date.now() - appStartedAtMs)
       }
+      if (!(await ensureCollaborationModeReadyForTurn())) {
+        turnStatus.value = 'failed'
+        return
+      }
       const payload = buildTurnStartPayload(threadId, INIT_PROMPT_FOR_SLASH_COMMAND)
       const response = await client.value.request('turn/start', payload)
       const startedTurnId = await applyTurnStartResponse(response, threadId, null)
@@ -3960,6 +4529,10 @@ function parseToolUserInputQuestions(params: Record<string, unknown>): ToolUserI
       await handleSlashPermissionsCommand(parsed.args, parsed.command)
       return true
     }
+    if (parsed.command === 'mode') {
+      await handleSlashModeCommand(parsed.args)
+      return true
+    }
     if (parsed.command === 'status') {
       await handleSlashStatusCommand()
       return true
@@ -3997,6 +4570,9 @@ function parseToolUserInputQuestions(params: Record<string, unknown>): ToolUserI
     const threadId = activeThreadId.value.trim()
     if (threadId.length === 0) {
       setUserGuidance('warn', '先に会話を開始または再開してください。')
+      return
+    }
+    if (!(await ensureCollaborationModeReadyForTurn())) {
       return
     }
     messageInput.value = ''
@@ -4408,6 +4984,8 @@ function parseToolUserInputQuestions(params: Record<string, unknown>): ToolUserI
     modelOptions,
     selectedModelId,
     selectedThinkingEffort,
+    collaborationModes,
+    selectedCollaborationMode,
     configSnapshot,
     executionModeConfig,
     executionModeCurrentPreset,
@@ -4476,6 +5054,7 @@ function parseToolUserInputQuestions(params: Record<string, unknown>): ToolUserI
     loadModelList,
     setSelectedModelId,
     setSelectedThinkingEffort,
+    setSelectedCollaborationMode,
     loadConfig,
     setSelectedExecutionModePreset,
     saveExecutionModeConfig,

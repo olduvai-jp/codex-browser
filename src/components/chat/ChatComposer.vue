@@ -1,6 +1,8 @@
 <script setup lang="ts">
 import { nextTick, onMounted, ref, watch } from 'vue'
 import type {
+  CollaborationModeKind,
+  CollaborationModeListEntry,
   ExecutionModePreset,
   ExecutionModeRequirements,
   ExecutionModeSelectablePreset,
@@ -21,6 +23,8 @@ const props = defineProps<{
   modelOptions: ModelOption[]
   selectedModelId: string
   selectedThinkingEffort: ReasoningEffort | ''
+  selectedCollaborationMode: CollaborationModeKind
+  collaborationModes: CollaborationModeListEntry[]
   thinkingOptions: ReasoningEffort[]
   currentExecutionModePreset: ExecutionModePreset
   selectedExecutionModePreset: ExecutionModePreset
@@ -35,6 +39,7 @@ const emit = defineEmits<{
   'update:modelValue': [value: string]
   'update:selectedModelId': [value: string]
   'update:selectedThinkingEffort': [value: string]
+  'update:selectedCollaborationMode': [value: CollaborationModeKind]
   'update:selectedExecutionModePreset': [value: ExecutionModePreset]
   saveExecutionModeConfig: []
   slashMoveSelection: [direction: 'up' | 'down']
@@ -151,6 +156,18 @@ function onModelChange(event: Event) {
 function onThinkingChange(event: Event) {
   const target = event.target as HTMLSelectElement
   emit('update:selectedThinkingEffort', target.value)
+}
+
+function isCollaborationModeOptionAvailable(mode: CollaborationModeKind): boolean {
+  if (props.collaborationModes.length === 0) {
+    return true
+  }
+  return props.collaborationModes.some((entry) => entry.mode === mode)
+}
+
+function onCollaborationModeChange(event: Event) {
+  const target = event.target as HTMLSelectElement
+  emit('update:selectedCollaborationMode', target.value as CollaborationModeKind)
 }
 
 function isExecutionModePresetAllowed(preset: ExecutionModePreset): boolean {
@@ -361,6 +378,23 @@ onMounted(async () => {
               <option value="">自動</option>
               <option v-for="effort in props.thinkingOptions" :key="effort" :value="effort">
                 {{ effort }}
+              </option>
+            </select>
+            <span class="pointer-events-none absolute right-1.5 top-1/2 -translate-y-1/2 text-[10px] text-text-muted">&#9662;</span>
+          </div>
+          <div class="relative min-w-0">
+            <select
+              :value="props.selectedCollaborationMode"
+              data-testid="collaboration-mode-select"
+              class="h-7 max-w-[6rem] appearance-none rounded-lg border-none bg-transparent py-0 pl-2 pr-5 text-xs text-text-muted hover:bg-sidebar-hover focus:outline-none disabled:cursor-not-allowed disabled:opacity-50 md:max-w-[7rem]"
+              :disabled="props.settingsDisabled"
+              @change="onCollaborationModeChange"
+            >
+              <option value="default" :disabled="!isCollaborationModeOptionAvailable('default')">
+                default
+              </option>
+              <option value="plan" :disabled="!isCollaborationModeOptionAvailable('plan')">
+                plan
               </option>
             </select>
             <span class="pointer-events-none absolute right-1.5 top-1/2 -translate-y-1/2 text-[10px] text-text-muted">&#9662;</span>

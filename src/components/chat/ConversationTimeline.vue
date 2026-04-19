@@ -65,6 +65,9 @@ function timelineItemUpdateSignature(item: TimelineItem): string {
   if (item.kind === 'approval') {
     return `${item.id}:${item.state}:${item.decision ?? ''}`
   }
+  if (item.kind === 'plan') {
+    return `${item.id}:${item.streaming ? '1' : '0'}:${item.text.length}`
+  }
 
   return `${item.id}:${item.state}:${item.questions.length}:${item.answers ? Object.keys(item.answers).length : 0}`
 }
@@ -193,6 +196,9 @@ function turnStatusDescription(status: string, label: string): string {
     return '応答を完了しました'
   }
   if (status === 'failed') {
+    if (label.trim().length > 0 && !/^Turn\b/.test(label.trim())) {
+      return label.trim()
+    }
     return '応答処理で問題が発生しました'
   }
   if (status === 'interrupted') {
@@ -222,6 +228,10 @@ function toolInputStateLabel(state: string): string {
   }
 
   return '対応待ち'
+}
+
+function planStateLabel(streaming: boolean): string {
+  return streaming ? '計画中...' : '完了'
 }
 
 function stringifyAnswers(value: Record<string, { answers: string[] }> | undefined): string {
@@ -491,6 +501,27 @@ function renderMessageContent(message: UiMessage): string {
             <span class="h-1.5 w-1.5 shrink-0 rounded-full" :class="turnStateClass(entry.status)" />
             <span>{{ turnStatusDescription(entry.status, entry.label) }}</span>
             <span v-if="formatTime(entry.occurredAt)">{{ formatTime(entry.occurredAt) }}</span>
+          </div>
+        </template>
+
+        <!-- Plan -->
+        <template v-else-if="entry.kind === 'plan'">
+          <div class="py-2 pl-2">
+            <div class="rounded-xl border border-accent/30 bg-accent/5 p-4">
+              <div class="flex items-center gap-2">
+                <span class="text-sm font-medium text-text-primary">Plan</span>
+                <span
+                  class="ml-auto rounded-full px-2 py-0.5 text-xs font-medium"
+                  data-testid="timeline-plan-state"
+                  :class="entry.streaming ? 'bg-accent/10 text-accent' : 'bg-success/10 text-success'"
+                >
+                  {{ planStateLabel(entry.streaming) }}
+                </span>
+              </div>
+              <pre
+                class="mt-2 max-h-72 overflow-auto whitespace-pre-wrap break-words rounded-lg bg-surface-secondary p-2 font-mono text-[11px] leading-5 text-text-secondary"
+              >{{ entry.text }}</pre>
+            </div>
           </div>
         </template>
 

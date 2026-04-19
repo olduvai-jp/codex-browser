@@ -136,6 +136,15 @@ export type ToolUserInputQuestion = {
   description?: string
   placeholder?: string
   defaultValue?: string
+  options?: ToolUserInputOption[]
+  isOther?: boolean
+  isSecret?: boolean
+}
+
+export type ToolUserInputOption = {
+  label: string
+  value: string
+  description?: string
 }
 
 export type ToolUserInputRequest = {

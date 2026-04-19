@@ -2583,6 +2583,85 @@ describe('useBridgeClient collaboration mode and plan timeline', () => {
     wrapper.unmount()
   })
 
+  it('parses tool user input options and normalizes boolean flags', async () => {
+    bridgeMock.setRequestHandler(async (method) => {
+      if (method === 'initialize') {
+        return { userAgent: 'mock-codex-agent' }
+      }
+      if (method === 'model/list') {
+        return { models: [] }
+      }
+      throw new Error(`Unexpected method: ${method}`)
+    })
+
+    const wrapper = mount(HostComponent)
+    const vm = wrapper.vm as unknown as {
+      connect: () => Promise<void>
+      toolUserInputRequests: Array<{
+        questions: Array<{
+          id: string
+          options?: Array<{ label: string; value: string; description?: string }>
+          isOther?: boolean
+          isSecret?: boolean
+        }>
+      }>
+    }
+
+    await vm.connect()
+    await flushPromises()
+
+    getClientInstance().emitMessage({
+      id: 'tool-input-options-parser-1',
+      method: 'item/tool/requestUserInput',
+      params: {
+        tool: 'parser_tool',
+        questions: [
+          {
+            id: 'q_options',
+            label: 'Select reason',
+            options: [
+              '  First  ',
+              { label: 'Second', value: 'second', description: 'Second description' },
+              { title: 'Third', id: 'third_id', helpText: 'Third description' },
+              { label: 'Second duplicate', value: 'second' },
+              {},
+              '   ',
+              { text: 'From text', key: 'from_text', hint: 'Text description' },
+            ],
+            is_other: 'true',
+            is_secret: '0',
+          },
+          {
+            id: 'q_secret',
+            label: 'Secret',
+            isOther: 'no',
+            isSecret: 'yes',
+          },
+        ],
+      },
+    })
+    await flushPromises()
+
+    const firstRequest = vm.toolUserInputRequests[0]
+    expect(firstRequest).toBeDefined()
+    const optionsQuestion = firstRequest?.questions[0]
+    expect(optionsQuestion?.options).toEqual([
+      { label: 'First', value: 'First' },
+      { label: 'Second', value: 'second', description: 'Second description' },
+      { label: 'Third', value: 'third_id', description: 'Third description' },
+      { label: 'From text', value: 'from_text', description: 'Text description' },
+    ])
+    expect(optionsQuestion?.isOther).toBe(true)
+    expect(optionsQuestion?.isSecret).toBe(false)
+
+    const secretQuestion = firstRequest?.questions[1]
+    expect(secretQuestion?.options).toBeUndefined()
+    expect(secretQuestion?.isOther).toBe(false)
+    expect(secretQuestion?.isSecret).toBe(true)
+
+    wrapper.unmount()
+  })
+
   it('surfaces server turn errors in guidance, system messages, and turn timeline', async () => {
     bridgeMock.setRequestHandler(async (method) => {
       if (method === 'initialize') {

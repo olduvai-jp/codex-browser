@@ -3314,6 +3314,9 @@ describe('App.vue ui phase-1 flows', () => {
     expect(wrapper.text()).toContain('inProgress')
 
     await getByTestId(wrapper, 'tool-user-input-field-q_name').setValue('Alice')
+    expect(getByTestId(wrapper, 'tool-user-input-submit').attributes('disabled')).toBeDefined()
+    await getByTestId(wrapper, 'tool-user-input-nav-next').trigger('click')
+    await flushPromises()
     await getByTestId(wrapper, 'tool-user-input-field-q_reason').setValue('Need access')
     await getByTestId(wrapper, 'tool-user-input-submit').trigger('click')
     await flushPromises()
@@ -3326,6 +3329,70 @@ describe('App.vue ui phase-1 flows', () => {
     })
     expect(wrapper.find('.tool-input-backdrop').exists()).toBe(false)
     expect(wrapper.text()).toContain('completed')
+
+    wrapper.unmount()
+  })
+
+  it('renders request user input options and submits selected/other answers', async () => {
+    bridgeMock.setRequestHandler(async (method) => {
+      if (method === 'initialize') {
+        return { userAgent: 'mock-codex-agent' }
+      }
+
+      throw new Error(`Unexpected method: ${method}`)
+    })
+
+    const wrapper = mount(App)
+    const client = await connectAndInitialize(wrapper)
+
+    client.emitMessage({
+      id: 'tool-input-options-1',
+      method: 'item/tool/requestUserInput',
+      params: {
+        turnId: 'turn-tool-input-options-1',
+        callId: 'call-tool-input-options-1',
+        tool: 'options_tool',
+        questions: [
+          {
+            questionId: 'q_choice',
+            label: 'Choice',
+            options: [
+              { label: 'First', value: 'first' },
+              { label: 'Second', value: 'second' },
+            ],
+          },
+          {
+            questionId: 'q_comment',
+            label: 'Comment',
+            isOther: true,
+            options: [{ label: 'No comment', value: 'none' }],
+          },
+        ],
+      },
+    })
+    await flushPromises()
+
+    expect(wrapper.find('.tool-input-backdrop').exists()).toBe(true)
+    expect(getByTestId(wrapper, 'tool-user-input-option-q_choice-first').exists()).toBe(true)
+    expect(getByTestId(wrapper, 'tool-user-input-option-q_choice-second').exists()).toBe(true)
+    expect(wrapper.find('[data-testid="tool-user-input-option-other-q_comment"]').exists()).toBe(false)
+    expect(wrapper.find('[data-testid="tool-user-input-field-q_choice"]').exists()).toBe(false)
+
+    await getByTestId(wrapper, 'tool-user-input-option-q_choice-second').setValue(true)
+    await getByTestId(wrapper, 'tool-user-input-nav-next').trigger('click')
+    await flushPromises()
+    await getByTestId(wrapper, 'tool-user-input-option-other-q_comment').setValue(true)
+    await getByTestId(wrapper, 'tool-user-input-field-other-q_comment').setValue('Other detail')
+    await getByTestId(wrapper, 'tool-user-input-submit').trigger('click')
+    await flushPromises()
+
+    expect(client.respond).toHaveBeenCalledWith('tool-input-options-1', {
+      answers: {
+        q_choice: { answers: ['second'] },
+        q_comment: { answers: ['Other detail'] },
+      },
+    })
+    expect(wrapper.find('.tool-input-backdrop').exists()).toBe(false)
 
     wrapper.unmount()
   })

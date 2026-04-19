@@ -56,6 +56,7 @@ import type {
   ToolCallEntry,
   ToolCallEvent,
   ToolCallStatus,
+  ToolUserInputOption,
   ToolUserInputQuestion,
   ToolUserInputRequest,
   TurnStatus,
@@ -2321,6 +2322,71 @@ function normalizeToolQuestionId(value: string, index: number): string {
   return `question_${index + 1}`
 }
 
+function parseLooseBoolean(value: unknown): boolean | undefined {
+  if (typeof value === 'boolean') {
+    return value
+  }
+  if (typeof value === 'number') {
+    if (value === 1) {
+      return true
+    }
+    if (value === 0) {
+      return false
+    }
+    return undefined
+  }
+  if (typeof value !== 'string') {
+    return undefined
+  }
+
+  const normalized = value.trim().toLowerCase()
+  if (normalized === 'true' || normalized === '1' || normalized === 'yes') {
+    return true
+  }
+  if (normalized === 'false' || normalized === '0' || normalized === 'no') {
+    return false
+  }
+
+  return undefined
+}
+
+function parseToolUserInputOptions(rawQuestion: Record<string, unknown>): ToolUserInputOption[] {
+  if (!Array.isArray(rawQuestion.options)) {
+    return []
+  }
+
+  const options: ToolUserInputOption[] = []
+  const usedValues = new Set<string>()
+  for (const rawOption of rawQuestion.options) {
+    let label = ''
+    let value = ''
+    let description: string | undefined
+    if (typeof rawOption === 'string') {
+      label = rawOption.trim()
+      value = label
+    } else if (isRecord(rawOption)) {
+      label = pickStringValue(rawOption, ['label', 'title', 'text', 'name']) ?? ''
+      value = pickStringValue(rawOption, ['value', 'id', 'key', 'name']) ?? label
+      description = pickStringValue(rawOption, ['description', 'helpText', 'help', 'hint']) ?? undefined
+    } else {
+      continue
+    }
+
+    if (label.length === 0 || value.length === 0 || usedValues.has(value)) {
+      continue
+    }
+
+    usedValues.add(value)
+    options.push({
+      label,
+      value,
+      description,
+    })
+  }
+
+  return options
+}
+
 function parseToolUserInputQuestions(params: Record<string, unknown>): ToolUserInputQuestion[] {
   const questionsSource = Array.isArray(params.questions)
     ? params.questions
@@ -2350,6 +2416,9 @@ function parseToolUserInputQuestions(params: Record<string, unknown>): ToolUserI
 
     const label =
       pickStringValue(rawQuestion, ['label', 'question', 'title', 'prompt', 'text']) ?? `質問 ${index + 1}`
+    const options = parseToolUserInputOptions(rawQuestion)
+    const isOther = parseLooseBoolean(rawQuestion.isOther ?? rawQuestion.is_other)
+    const isSecret = parseLooseBoolean(rawQuestion.isSecret ?? rawQuestion.is_secret)
     questions.push({
       id: questionId,
       label,
@@ -2357,6 +2426,9 @@ function parseToolUserInputQuestions(params: Record<string, unknown>): ToolUserI
       placeholder: pickStringValue(rawQuestion, ['placeholder']) ?? undefined,
       defaultValue:
         pickStringValue(rawQuestion, ['defaultValue', 'default', 'value', 'initialValue']) ?? undefined,
+      options: options.length > 0 ? options : undefined,
+      isOther,
+      isSecret,
     })
   }
 

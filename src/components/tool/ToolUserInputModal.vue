@@ -1,10 +1,11 @@
 <script setup lang="ts">
-import { onMounted, reactive, ref, watch } from 'vue'
+import { computed, nextTick, onBeforeUpdate, onMounted, reactive, ref, watch, type ComponentPublicInstance } from 'vue'
 
 import type { ToolUserInputRequest } from '@/types'
 import { useModalFocusTrap } from '@/composables/useModalFocusTrap'
 
 type ToolUserInputAnswers = Record<string, { answers: string[] }>
+const OTHER_OPTION_VALUE = '__tool_user_input_other__'
 
 const props = defineProps<{
   request: ToolUserInputRequest
@@ -17,41 +18,128 @@ const emit = defineEmits<{
 }>()
 
 const localAnswers = reactive<Record<string, string>>({})
+const selectedOptionValues = reactive<Record<string, string>>({})
+const otherAnswers = reactive<Record<string, string>>({})
 const modalRef = ref<HTMLElement | null>(null)
+const currentQuestionIndex = ref(0)
+const questionInputRefs = ref<HTMLElement[]>([])
 const { focusInitialElement, handleModalKeydown } = useModalFocusTrap({
   containerRef: modalRef,
   onEscape: () => emit('cancel'),
 })
+const totalQuestions = computed(() => props.request.questions.length)
+const currentQuestion = computed(() => props.request.questions[currentQuestionIndex.value] ?? null)
+const isSingleQuestion = computed(() => totalQuestions.value <= 1)
+const isFirstQuestion = computed(() => currentQuestionIndex.value === 0)
+const isLastQuestion = computed(
+  () => totalQuestions.value > 0 && currentQuestionIndex.value === totalQuestions.value - 1,
+)
+const canSubmit = computed(() => isSingleQuestion.value || isLastQuestion.value)
+
+onBeforeUpdate(() => {
+  questionInputRefs.value = []
+})
+
+function setQuestionInputRef(element: Element | ComponentPublicInstance | null): void {
+  if (!element) {
+    return
+  }
+
+  if (element instanceof HTMLElement) {
+    questionInputRefs.value.push(element)
+    return
+  }
+
+  if ('$el' in element && element.$el instanceof HTMLElement) {
+    questionInputRefs.value.push(element.$el)
+  }
+}
+
+async function focusCurrentQuestionInput(): Promise<void> {
+  await nextTick()
+
+  const target = questionInputRefs.value[0]
+  if (target) {
+    target.focus()
+    return
+  }
+  await focusInitialElement()
+}
+
+function hasOptions(question: ToolUserInputRequest['questions'][number]): boolean {
+  return Array.isArray(question.options) && question.options.length > 0
+}
 
 watch(
   () => props.request,
   (request) => {
+    currentQuestionIndex.value = 0
+
     for (const key of Object.keys(localAnswers)) {
       delete localAnswers[key]
     }
+    for (const key of Object.keys(selectedOptionValues)) {
+      delete selectedOptionValues[key]
+    }
+    for (const key of Object.keys(otherAnswers)) {
+      delete otherAnswers[key]
+    }
 
     for (const question of request.questions) {
-      localAnswers[question.id] = question.defaultValue ?? ''
+      const defaultValue = question.defaultValue ?? ''
+      if (!hasOptions(question)) {
+        localAnswers[question.id] = defaultValue
+        continue
+      }
+
+      const defaultOption = question.options?.find((option) => option.value === defaultValue)
+      if (defaultOption) {
+        selectedOptionValues[question.id] = defaultOption.value
+        otherAnswers[question.id] = ''
+        continue
+      }
+      if (question.isOther && defaultValue.length > 0) {
+        selectedOptionValues[question.id] = OTHER_OPTION_VALUE
+        otherAnswers[question.id] = defaultValue
+        continue
+      }
+
+      selectedOptionValues[question.id] = ''
+      otherAnswers[question.id] = ''
     }
   },
   { immediate: true },
 )
 
 onMounted(() => {
-  void focusInitialElement()
+  void focusCurrentQuestionInput()
 })
 
 watch(
   () => props.request.id,
   () => {
-    void focusInitialElement()
+    void focusCurrentQuestionInput()
   },
 )
+
+watch(currentQuestionIndex, () => {
+  void focusCurrentQuestionInput()
+})
 
 function buildAnswerPayload(): ToolUserInputAnswers {
   const answers: ToolUserInputAnswers = {}
   for (const question of props.request.questions) {
-    const value = (localAnswers[question.id] ?? '').trim()
+    let value = ''
+    if (hasOptions(question)) {
+      const selectedValue = selectedOptionValues[question.id] ?? ''
+      if (selectedValue === OTHER_OPTION_VALUE) {
+        value = (otherAnswers[question.id] ?? '').trim()
+      } else {
+        value = selectedValue
+      }
+    } else {
+      value = (localAnswers[question.id] ?? '').trim()
+    }
     answers[question.id] = {
       answers: value.length > 0 ? [value] : [],
     }
@@ -60,7 +148,24 @@ function buildAnswerPayload(): ToolUserInputAnswers {
   return answers
 }
 
+function goToPreviousQuestion(): void {
+  if (isFirstQuestion.value) {
+    return
+  }
+  currentQuestionIndex.value -= 1
+}
+
+function goToNextQuestion(): void {
+  if (isLastQuestion.value) {
+    return
+  }
+  currentQuestionIndex.value += 1
+}
+
 function submitAnswers(): void {
+  if (!canSubmit.value) {
+    return
+  }
   emit('submit', buildAnswerPayload())
 }
 </script>
@@ -89,29 +194,115 @@ function submitAnswers(): void {
       </div>
 
       <div class="flex flex-col gap-3">
-        <label
-          v-for="question in request.questions"
-          :key="question.id"
-          class="flex flex-col gap-1"
+        <div
+          v-if="currentQuestion"
+          :key="currentQuestion.id"
+          class="flex flex-col gap-2"
         >
-          <span class="text-sm font-medium text-text-primary">{{ question.label }}</span>
-          <span v-if="question.description" class="text-xs text-text-tertiary">{{ question.description }}</span>
+          <span class="text-sm font-medium text-text-primary">{{ currentQuestion.label }}</span>
+          <span v-if="currentQuestion.description" class="text-xs text-text-tertiary">{{ currentQuestion.description }}</span>
+          <fieldset v-if="hasOptions(currentQuestion)" class="flex flex-col gap-2">
+            <legend class="sr-only">{{ currentQuestion.label }}</legend>
+            <label
+              v-for="option in currentQuestion.options ?? []"
+              :key="`${currentQuestion.id}-${option.value}`"
+              class="flex cursor-pointer items-start gap-2 rounded-lg border border-border-default bg-surface-secondary px-3 py-2"
+            >
+              <input
+                :ref="setQuestionInputRef"
+                v-model="selectedOptionValues[currentQuestion.id]"
+                type="radio"
+                :name="`tool-user-input-option-${currentQuestion.id}`"
+                :value="option.value"
+                :data-testid="`tool-user-input-option-${currentQuestion.id}-${option.value}`"
+                class="mt-0.5"
+              >
+              <span class="flex flex-col gap-0.5">
+                <span class="text-sm text-text-primary">{{ option.label }}</span>
+                <span v-if="option.description" class="text-xs text-text-tertiary">{{ option.description }}</span>
+              </span>
+            </label>
+            <label
+              v-if="currentQuestion.isOther"
+              class="flex cursor-pointer items-start gap-2 rounded-lg border border-border-default bg-surface-secondary px-3 py-2"
+            >
+              <input
+                :ref="setQuestionInputRef"
+                v-model="selectedOptionValues[currentQuestion.id]"
+                type="radio"
+                :name="`tool-user-input-option-${currentQuestion.id}`"
+                :value="OTHER_OPTION_VALUE"
+                :data-testid="`tool-user-input-option-other-${currentQuestion.id}`"
+                class="mt-0.5"
+              >
+              <span class="text-sm text-text-primary">その他</span>
+            </label>
+            <input
+              v-if="currentQuestion.isOther && selectedOptionValues[currentQuestion.id] === OTHER_OPTION_VALUE"
+              :ref="setQuestionInputRef"
+              v-model="otherAnswers[currentQuestion.id]"
+              :type="currentQuestion.isSecret ? 'password' : 'text'"
+              :data-testid="`tool-user-input-field-other-${currentQuestion.id}`"
+              :placeholder="currentQuestion.placeholder || '回答を入力してください'"
+              class="rounded-lg border border-border-default bg-surface-secondary px-3 py-2 text-base text-text-primary placeholder:text-text-tertiary focus:border-accent focus:ring-1 focus:ring-accent focus:outline-none"
+            >
+          </fieldset>
+          <input
+            v-else-if="currentQuestion.isSecret"
+            :ref="setQuestionInputRef"
+            v-model="localAnswers[currentQuestion.id]"
+            type="password"
+            :data-testid="`tool-user-input-field-${currentQuestion.id}`"
+            :placeholder="currentQuestion.placeholder || '回答を入力してください'"
+            class="rounded-lg border border-border-default bg-surface-secondary px-3 py-2 text-base text-text-primary placeholder:text-text-tertiary focus:border-accent focus:ring-1 focus:ring-accent focus:outline-none"
+          >
           <textarea
-            v-model="localAnswers[question.id]"
-            :data-testid="`tool-user-input-field-${question.id}`"
+            v-else
+            :ref="setQuestionInputRef"
+            v-model="localAnswers[currentQuestion.id]"
+            :data-testid="`tool-user-input-field-${currentQuestion.id}`"
             rows="2"
-            :placeholder="question.placeholder || '回答を入力してください'"
+            :placeholder="currentQuestion.placeholder || '回答を入力してください'"
             class="rounded-lg border border-border-default bg-surface-secondary px-3 py-2 text-base text-text-primary placeholder:text-text-tertiary focus:border-accent focus:ring-1 focus:ring-accent focus:outline-none"
           />
-        </label>
+        </div>
       </div>
 
-      <pre class="max-h-40 overflow-auto rounded-xl border border-border-default bg-surface-secondary p-3 font-mono text-xs text-text-secondary">{{ JSON.stringify(request.params, null, 2) }}</pre>
+      <div v-if="!isSingleQuestion" class="flex items-center justify-between gap-3">
+        <button
+          type="button"
+          class="rounded-lg border border-border-default bg-surface-secondary px-3 py-2 text-sm font-medium text-text-primary transition-colors hover:bg-surface-tertiary disabled:cursor-not-allowed disabled:opacity-50"
+          data-testid="tool-user-input-nav-prev"
+          aria-label="前の質問へ"
+          :disabled="isFirstQuestion"
+          @click="goToPreviousQuestion"
+        >
+          前へ
+        </button>
+        <p
+          class="text-xs text-text-tertiary"
+          data-testid="tool-user-input-question-progress"
+          aria-live="polite"
+        >
+          質問 {{ currentQuestionIndex + 1 }} / {{ totalQuestions }}
+        </p>
+        <button
+          type="button"
+          class="rounded-lg border border-border-default bg-surface-secondary px-3 py-2 text-sm font-medium text-text-primary transition-colors hover:bg-surface-tertiary disabled:cursor-not-allowed disabled:opacity-50"
+          data-testid="tool-user-input-nav-next"
+          aria-label="次の質問へ"
+          :disabled="isLastQuestion"
+          @click="goToNextQuestion"
+        >
+          次へ
+        </button>
+      </div>
 
       <div class="flex flex-col gap-2 md:flex-row md:gap-3">
         <button
-          class="flex-1 rounded-lg bg-accent px-4 py-2.5 text-sm font-medium text-white transition-colors hover:bg-accent-hover max-md:py-3"
+          class="flex-1 rounded-lg bg-accent px-4 py-2.5 text-sm font-medium text-white transition-colors hover:bg-accent-hover disabled:cursor-not-allowed disabled:opacity-50 max-md:py-3"
           data-testid="tool-user-input-submit"
+          :disabled="!canSubmit"
           @click="submitAnswers"
         >
           送信する

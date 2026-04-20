@@ -91,6 +91,7 @@ const COLLABORATION_MODE_VALUES: CollaborationModeKind[] = ['default', 'plan']
 const COLLABORATION_MODE_SET = new Set<CollaborationModeKind>(COLLABORATION_MODE_VALUES)
 const DEFAULT_COLLABORATION_MODE: CollaborationModeKind = 'default'
 const DEFAULT_COLLABORATION_MODE_REASONING_EFFORT: ReasoningEffort = 'medium'
+const PLAN_IMPLEMENTATION_TURN_TEXT = 'Implement the plan.'
 
 type ToolItemType = 'commandExecution' | 'fileChange' | 'mcpToolCall'
 type ToolUserInputAnswers = Record<string, { answers: string[] }>
@@ -129,6 +130,10 @@ type TokenUsageBreakdown = {
   cachedInputTokens: number
   outputTokens: number
   reasoningOutputTokens: number
+}
+type PlanImplementationTurnMeta = {
+  hasCompletedPlanItem: boolean
+  startedInPlanMode: boolean
 }
 type ThreadTokenUsageSnapshot = {
   total: TokenUsageBreakdown
@@ -1277,6 +1282,9 @@ export function useBridgeClient() {
   const toolCalls = ref<ToolCallEntry[]>([])
   const toolUserInputRequests = ref<ToolUserInputRequest[]>([])
   const approvals = ref<ApprovalRequest[]>([])
+  const planImplementationPromptTurnId = ref('')
+  const planImplementationCandidateTurnId = ref('')
+  const isPlanImplementationStarting = ref(false)
   const turnStatusTimeline = ref<TimelineTurnStatusEntry[]>([])
   const approvalTimeline = ref<TimelineApprovalEntry[]>([])
   const toolUserInputTimeline = ref<TimelineToolUserInputEntry[]>([])
@@ -1299,6 +1307,8 @@ export function useBridgeClient() {
   const approvalTimelineEntryIdByMetricKey = new Map<string, string>()
   const toolUserInputTimelineEntryIdByRequestKey = new Map<string, string>()
   const planTimelineEntryIdByLookupKey = new Map<string, string>()
+  const livePlanTurnMetaByTurnId = new Map<string, PlanImplementationTurnMeta>()
+  const dismissedPlanImplementationTurnIds = new Set<string>()
   const toolCallEntryIdByLookupKey = new Map<string, string>()
   const codexAppPendingFirstTurnHistoryUpsertOverlayByThreadId = new Map<string, CodexAppOverlayEntry>()
   const tokenUsageByThreadId = new Map<string, ThreadTokenUsageSnapshot>()
@@ -1550,6 +1560,127 @@ export function useBridgeClient() {
   })
   const currentToolUserInputRequest = computed(() => toolUserInputRequests.value[0] ?? null)
   const currentApproval = computed(() => approvals.value[0] ?? null)
+  const planImplementationPromptOpen = computed(
+    () => planImplementationPromptTurnId.value.trim().length > 0,
+  )
+
+  function clearPlanImplementationPromptState(): void {
+    planImplementationPromptTurnId.value = ''
+    planImplementationCandidateTurnId.value = ''
+    isPlanImplementationStarting.value = false
+    livePlanTurnMetaByTurnId.clear()
+    dismissedPlanImplementationTurnIds.clear()
+  }
+
+  function registerLivePlanTurnMeta(turnId: string): void {
+    const normalizedTurnId = normalizeTurnId(turnId)
+    if (!normalizedTurnId) {
+      return
+    }
+    livePlanTurnMetaByTurnId.set(normalizedTurnId, {
+      hasCompletedPlanItem: false,
+      startedInPlanMode: selectedCollaborationMode.value === 'plan',
+    })
+  }
+
+  function markLivePlanTurnItemCompleted(turnId: string | undefined): void {
+    const normalizedTurnId = normalizeTurnId(turnId)
+    if (!normalizedTurnId) {
+      return
+    }
+    const currentMeta = livePlanTurnMetaByTurnId.get(normalizedTurnId)
+    if (!currentMeta) {
+      return
+    }
+    currentMeta.hasCompletedPlanItem = true
+  }
+
+  function hasPendingApprovalOrToolUserInput(): boolean {
+    return approvals.value.length > 0 || toolUserInputRequests.value.length > 0
+  }
+
+  function evaluatePlanImplementationPrompt(turnId: string): {
+    canShowPrompt: boolean
+    blockedByPendingQueue: boolean
+  } {
+    const normalizedTurnId = normalizeTurnId(turnId)
+    if (!normalizedTurnId) {
+      return {
+        canShowPrompt: false,
+        blockedByPendingQueue: false,
+      }
+    }
+
+    const turnMeta = livePlanTurnMetaByTurnId.get(normalizedTurnId)
+    if (!turnMeta || !turnMeta.startedInPlanMode || !turnMeta.hasCompletedPlanItem) {
+      return {
+        canShowPrompt: false,
+        blockedByPendingQueue: false,
+      }
+    }
+    if (dismissedPlanImplementationTurnIds.has(normalizedTurnId)) {
+      return {
+        canShowPrompt: false,
+        blockedByPendingQueue: false,
+      }
+    }
+
+    if (hasPendingApprovalOrToolUserInput()) {
+      return {
+        canShowPrompt: false,
+        blockedByPendingQueue: true,
+      }
+    }
+
+    return {
+      canShowPrompt: true,
+      blockedByPendingQueue: false,
+    }
+  }
+
+  function showPlanImplementationPrompt(turnId: string): void {
+    const normalizedTurnId = normalizeTurnId(turnId)
+    if (!normalizedTurnId || dismissedPlanImplementationTurnIds.has(normalizedTurnId)) {
+      return
+    }
+    planImplementationPromptTurnId.value = normalizedTurnId
+    planImplementationCandidateTurnId.value = ''
+  }
+
+  function schedulePlanImplementationPromptCandidate(turnId: string): void {
+    const normalizedTurnId = normalizeTurnId(turnId)
+    if (!normalizedTurnId || dismissedPlanImplementationTurnIds.has(normalizedTurnId)) {
+      return
+    }
+    planImplementationCandidateTurnId.value = normalizedTurnId
+  }
+
+  function dismissPlanImplementationPrompt(turnId?: string): void {
+    const normalizedTurnId =
+      normalizeTurnId(turnId)
+      ?? normalizeTurnId(planImplementationPromptTurnId.value)
+      ?? normalizeTurnId(planImplementationCandidateTurnId.value)
+    if (normalizedTurnId) {
+      dismissedPlanImplementationTurnIds.add(normalizedTurnId)
+    }
+    planImplementationPromptTurnId.value = ''
+    planImplementationCandidateTurnId.value = ''
+  }
+
+  function promotePlanImplementationCandidateIfReady(): void {
+    const candidateTurnId = normalizeTurnId(planImplementationCandidateTurnId.value)
+    if (!candidateTurnId) {
+      return
+    }
+    const evaluation = evaluatePlanImplementationPrompt(candidateTurnId)
+    if (evaluation.canShowPrompt) {
+      showPlanImplementationPrompt(candidateTurnId)
+      return
+    }
+    if (!evaluation.blockedByPendingQueue) {
+      planImplementationCandidateTurnId.value = ''
+    }
+  }
 
   watch(
     () => ({
@@ -1594,6 +1725,20 @@ export function useBridgeClient() {
       }
     },
     { immediate: true },
+  )
+  watch(
+    () => [approvals.value.length, toolUserInputRequests.value.length] as const,
+    () => {
+      if (hasPendingApprovalOrToolUserInput()) {
+        const openPromptTurnId = normalizeTurnId(planImplementationPromptTurnId.value)
+        if (openPromptTurnId) {
+          planImplementationPromptTurnId.value = ''
+          schedulePlanImplementationPromptCandidate(openPromptTurnId)
+        }
+        return
+      }
+      promotePlanImplementationCandidateIfReady()
+    },
   )
   const historyResumeSuccessRate = computed(() =>
     historyResumeAttemptCount.value === 0
@@ -2687,6 +2832,7 @@ function extractPlanDeltaText(params: Record<string, unknown>): string {
     readPreviewThreadId.value = ''
     currentTurnId.value = ''
     turnStatus.value = 'idle'
+    clearPlanImplementationPromptState()
     isSlashModelPickerOpen.value = false
     isSlashPermissionsPickerOpen.value = false
   }
@@ -3217,6 +3363,14 @@ function extractPlanDeltaText(params: Record<string, unknown>): string {
         turnErrorMessage.length > 0 ? `Turn completed: ${status}: ${turnErrorMessage}` : `Turn completed: ${status}`,
         params,
       )
+      if (status === 'completed' && normalizedTurnId) {
+        const promptEvaluation = evaluatePlanImplementationPrompt(normalizedTurnId)
+        if (promptEvaluation.canShowPrompt) {
+          showPlanImplementationPrompt(normalizedTurnId)
+        } else if (promptEvaluation.blockedByPendingQueue) {
+          schedulePlanImplementationPromptCandidate(normalizedTurnId)
+        }
+      }
       return
     }
 
@@ -3427,6 +3581,7 @@ function extractPlanDeltaText(params: Record<string, unknown>): string {
         }
         entry.streaming = false
         entry.updatedAt = new Date().toISOString()
+        markLivePlanTurnItemCompleted(turnId)
       }
 
       const toolItemType = normalizeToolItemType(item.type)
@@ -3551,6 +3706,7 @@ function extractPlanDeltaText(params: Record<string, unknown>): string {
     codexAppHistoryGeneratedAt.value = ''
     codexAppPendingFirstTurnHistoryUpsertOverlayByThreadId.clear()
     planTimelineEntryIdByLookupKey.clear()
+    clearPlanImplementationPromptState()
     connectionState.value = 'disconnected'
   }
 
@@ -4192,6 +4348,7 @@ function extractPlanDeltaText(params: Record<string, unknown>): string {
     }
 
     currentTurnId.value = response.turn.id
+    registerLivePlanTurnMeta(response.turn.id)
     if (
       isCodexAppHistoryMode.value &&
       codexAppPendingFirstTurnHistoryUpsertOverlayByThreadId.has(threadId)
@@ -4626,37 +4783,38 @@ function extractPlanDeltaText(params: Record<string, unknown>): string {
     return true
   }
 
-  async function sendTurn(): Promise<void> {
-    if (!client.value || !canSendMessage.value) {
-      return
-    }
+  type StartTurnSource = 'composer' | 'planImplementationPrompt'
+  type StartTurnWithTextOptions = {
+    source: StartTurnSource
+    optimisticUserMessage?: boolean
+    titleCandidate?: string | null
+    restoreInputOnError?: boolean
+  }
 
-    const text = messageInput.value.trim()
-    if (text.length === 0) {
-      return
-    }
-    if (await dispatchSlashCommand(text)) {
-      return
+  async function startTurnWithText(text: string, options: StartTurnWithTextOptions): Promise<boolean> {
+    if (!client.value) {
+      return false
     }
 
     const threadId = activeThreadId.value.trim()
     if (threadId.length === 0) {
       setUserGuidance('warn', '先に会話を開始または再開してください。')
-      return
+      return false
     }
     if (!(await ensureCollaborationModeReadyForTurn())) {
-      return
+      return false
     }
-    messageInput.value = ''
-    const optimisticMessageId = makeUiMessageId('user')
 
-    addMessage({
-      id: optimisticMessageId,
-      role: 'user',
-      text,
-      assistantUtteranceStarted: false,
-      turnId: currentTurnId.value || undefined,
-    })
+    const optimisticUserMessageId = options.optimisticUserMessage ? makeUiMessageId('user') : ''
+    if (optimisticUserMessageId.length > 0) {
+      addMessage({
+        id: optimisticUserMessageId,
+        role: 'user',
+        text,
+        assistantUtteranceStarted: false,
+        turnId: currentTurnId.value || undefined,
+      })
+    }
 
     turnStatus.value = 'inProgress'
 
@@ -4666,17 +4824,26 @@ function extractPlanDeltaText(params: Record<string, unknown>): string {
       }
       const payload = buildTurnStartPayload(threadId, text)
       const response = await client.value.request('turn/start', payload)
-      const startedTurnId = await applyTurnStartResponse(response, threadId, text)
+      const startedTurnId = await applyTurnStartResponse(
+        response,
+        threadId,
+        options.titleCandidate ?? null,
+      )
       if (startedTurnId) {
-        return
+        return true
       }
       turnStatus.value = 'failed'
       pushTurnStatusTimeline('failed', 'Turn start failed: missing turn.id', currentTurnId.value || undefined)
+      return false
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error)
-      messages.value = messages.value.filter((entry) => entry.id !== optimisticMessageId)
-      messageInput.value = text
-      pushLog('rpc', 'error', `turn/start failed: ${message}`)
+      if (optimisticUserMessageId.length > 0) {
+        messages.value = messages.value.filter((entry) => entry.id !== optimisticUserMessageId)
+      }
+      if (options.restoreInputOnError) {
+        messageInput.value = text
+      }
+      pushLog('rpc', 'error', `turn/start failed (${options.source}): ${message}`)
       if (isThreadNotFoundError(message)) {
         if (activeThreadId.value.trim() === threadId) {
           activeThreadId.value = ''
@@ -4689,7 +4856,7 @@ function extractPlanDeltaText(params: Record<string, unknown>): string {
           'warn',
           `会話がサーバー上で見つかりません。新しい会話を作成または再開してから再送してください。詳細: ${message}`,
         )
-        return
+        return false
       }
       turnStatus.value = 'failed'
       pushTurnStatusTimeline('failed', `Turn start failed: ${message}`, currentTurnId.value || undefined)
@@ -4697,7 +4864,75 @@ function extractPlanDeltaText(params: Record<string, unknown>): string {
         'error',
         `メッセージ送信に失敗しました。しばらく待ってから再送してください。詳細: ${message}`,
       )
+      return false
     }
+  }
+
+  async function implementPlanFromPrompt(): Promise<void> {
+    if (isPlanImplementationStarting.value) {
+      return
+    }
+
+    const promptTurnId = normalizeTurnId(planImplementationPromptTurnId.value)
+    if (!promptTurnId) {
+      return
+    }
+
+    dismissPlanImplementationPrompt(promptTurnId)
+    selectedCollaborationMode.value = DEFAULT_COLLABORATION_MODE
+    if (isTurnActive.value) {
+      setUserGuidance('warn', '現在のターン完了後に再実行してください。')
+      return
+    }
+    if (!client.value || !isConnected.value || !initialized.value) {
+      setUserGuidance('warn', '接続が無効です。再接続してから再実行してください。')
+      return
+    }
+    if (activeThreadId.value.trim().length === 0) {
+      setUserGuidance('warn', 'アクティブな会話がありません。会話を開始または再開してください。')
+      return
+    }
+
+    isPlanImplementationStarting.value = true
+    try {
+      await startTurnWithText(PLAN_IMPLEMENTATION_TURN_TEXT, {
+        source: 'planImplementationPrompt',
+      })
+    } finally {
+      isPlanImplementationStarting.value = false
+    }
+  }
+
+  function continuePlanModeFromPrompt(): void {
+    dismissPlanImplementationPrompt()
+  }
+
+  function cancelPlanImplementationPrompt(): void {
+    dismissPlanImplementationPrompt()
+  }
+
+  async function sendTurn(): Promise<void> {
+    if (!client.value || !canSendMessage.value) {
+      return
+    }
+
+    const text = messageInput.value.trim()
+    if (text.length === 0) {
+      return
+    }
+    if (planImplementationPromptOpen.value) {
+      dismissPlanImplementationPrompt()
+    }
+    if (await dispatchSlashCommand(text)) {
+      return
+    }
+    messageInput.value = ''
+    await startTurnWithText(text, {
+      source: 'composer',
+      optimisticUserMessage: true,
+      titleCandidate: text,
+      restoreInputOnError: true,
+    })
   }
 
   async function interruptTurn(): Promise<void> {
@@ -5078,6 +5313,8 @@ function extractPlanDeltaText(params: Record<string, unknown>): string {
     toolCalls,
     toolUserInputRequests,
     approvals,
+    planImplementationPromptOpen,
+    isPlanImplementationStarting,
     timelineItems,
     firstSendDurationMs,
     historyResumeAttemptCount,
@@ -5140,6 +5377,9 @@ function extractPlanDeltaText(params: Record<string, unknown>): string {
     openSlashPermissionsPicker,
     closeSlashPermissionsPicker,
     selectSlashPermissionsPresetFromPicker,
+    implementPlanFromPrompt,
+    continuePlanModeFromPrompt,
+    cancelPlanImplementationPrompt,
     respondToToolUserInput,
     cancelToolUserInputRequest,
     respondToApproval,

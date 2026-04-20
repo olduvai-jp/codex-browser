@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { nextTick, onMounted, ref, watch } from 'vue'
+import { computed, nextTick, onMounted, ref, watch } from 'vue'
 import type {
   CollaborationModeKind,
   CollaborationModeListEntry,
@@ -33,6 +33,8 @@ const props = defineProps<{
   slashSuggestionsOpen: boolean
   slashSuggestions: SlashSuggestionItem[]
   activeSlashSuggestionIndex: number
+  planImplementationPromptOpen: boolean
+  planImplementationStarting: boolean
 }>()
 
 const emit = defineEmits<{
@@ -46,11 +48,20 @@ const emit = defineEmits<{
   slashCommitSelection: []
   slashCloseSuggestions: []
   slashSelectSuggestion: [id: string]
+  implementPlan: []
+  continuePlanMode: []
+  cancelPlanImplementationPrompt: []
   send: []
   interrupt: []
 }>()
 
 const textareaRef = ref<HTMLTextAreaElement | null>(null)
+const showSlashSuggestions = computed(
+  () =>
+    !props.planImplementationPromptOpen &&
+    props.slashSuggestionsOpen &&
+    props.slashSuggestions.length > 0,
+)
 
 function resizeTextarea(element?: HTMLTextAreaElement | null): void {
   const textarea = element ?? textareaRef.value
@@ -83,7 +94,7 @@ function onEnterKeydown(event: KeyboardEvent) {
   }
 
   event.preventDefault()
-  if (props.slashSuggestionsOpen && hasEnabledSlashSuggestions()) {
+  if (showSlashSuggestions.value && hasEnabledSlashSuggestions()) {
     emit('slashCommitSelection')
     return
   }
@@ -100,7 +111,14 @@ function onKeydown(event: KeyboardEvent): void {
   if (isImeComposing.value || event.isComposing || event.keyCode === 229) {
     return
   }
-  if (!props.slashSuggestionsOpen || props.slashSuggestions.length === 0) {
+
+  if (props.planImplementationPromptOpen && event.key === 'Escape') {
+    event.preventDefault()
+    onCancelPlanImplementationPrompt()
+    return
+  }
+
+  if (!showSlashSuggestions.value) {
     return
   }
 
@@ -127,6 +145,26 @@ function onKeydown(event: KeyboardEvent): void {
     event.preventDefault()
     emit('slashCloseSuggestions')
   }
+}
+
+function focusTextarea(): void {
+  void nextTick(() => {
+    textareaRef.value?.focus()
+  })
+}
+
+function onImplementPlanClick(): void {
+  emit('implementPlan')
+}
+
+function onContinuePlanModeClick(): void {
+  emit('continuePlanMode')
+  focusTextarea()
+}
+
+function onCancelPlanImplementationPrompt(): void {
+  emit('cancelPlanImplementationPrompt')
+  focusTextarea()
 }
 
 function isActiveSlashSuggestion(index: number): boolean {
@@ -275,9 +313,45 @@ onMounted(async () => {
     <div class="pointer-events-none absolute bottom-full left-0 right-0 h-8 bg-gradient-to-t from-chat-bg to-transparent" />
 
     <form class="relative mx-auto w-full max-w-[48rem]" @submit.prevent="emit('send')">
+      <div
+        v-if="props.planImplementationPromptOpen"
+        data-testid="plan-implementation-prompt"
+        class="absolute bottom-full left-0 right-0 mb-2 rounded-lg border border-border-default/70 bg-surface/95 p-2 shadow-lg backdrop-blur-sm"
+      >
+        <div class="flex items-center gap-1.5 overflow-x-auto whitespace-nowrap">
+          <p class="text-sm font-semibold text-text-primary">Implement this plan?</p>
+          <button
+            data-testid="plan-implementation-yes"
+            type="button"
+            class="rounded-lg border border-border-default/70 bg-surface px-2 py-1 text-xs font-semibold text-text-primary transition-colors hover:bg-surface-secondary disabled:cursor-not-allowed disabled:opacity-40"
+            :disabled="props.planImplementationStarting"
+            @click="onImplementPlanClick"
+          >
+            Yes
+          </button>
+          <button
+            data-testid="plan-implementation-no"
+            type="button"
+            class="rounded-lg border border-border-default/70 bg-surface px-2 py-1 text-xs font-semibold text-text-primary transition-colors hover:bg-surface-secondary"
+            @click="onContinuePlanModeClick"
+          >
+            No
+          </button>
+          <button
+            data-testid="plan-implementation-cancel"
+            type="button"
+            class="rounded-lg border border-border-default/70 px-2 py-1 text-xs text-text-secondary transition-colors hover:bg-surface-secondary"
+            aria-label="Cancel"
+            @click="onCancelPlanImplementationPrompt"
+          >
+            x
+          </button>
+        </div>
+      </div>
+
       <!-- Slash suggestions floating above composer -->
       <div
-        v-if="props.slashSuggestionsOpen && props.slashSuggestions.length > 0"
+        v-if="showSlashSuggestions"
         id="slash-suggestions-listbox"
         data-testid="slash-suggestions"
         class="absolute bottom-full left-0 right-0 mb-2 max-h-56 overflow-y-auto rounded-xl border border-border-default/70 bg-surface/95 p-1 shadow-lg backdrop-blur-sm"
@@ -312,10 +386,10 @@ onMounted(async () => {
             rows="1"
             placeholder="Codex にメッセージを送信..."
             :disabled="props.disabled"
-            :aria-expanded="props.slashSuggestionsOpen ? 'true' : 'false'"
-            :aria-controls="'slash-suggestions-listbox'"
+            :aria-expanded="showSlashSuggestions ? 'true' : 'false'"
+            :aria-controls="showSlashSuggestions ? 'slash-suggestions-listbox' : undefined"
             :aria-activedescendant="
-              props.slashSuggestionsOpen && props.activeSlashSuggestionIndex >= 0
+              showSlashSuggestions && props.activeSlashSuggestionIndex >= 0
                 ? getSlashSuggestionOptionId(props.activeSlashSuggestionIndex)
                 : undefined
             "

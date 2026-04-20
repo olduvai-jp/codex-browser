@@ -45,6 +45,8 @@ const {
   activeSlashSuggestionIndex,
   toolUserInputRequests,
   approvals,
+  planImplementationPromptOpen,
+  isPlanImplementationStarting,
   timelineItems,
   historyResumeAttemptCount,
   historyResumeSuccessCount,
@@ -93,6 +95,9 @@ const {
   selectSlashModelFromPicker,
   closeSlashPermissionsPicker,
   selectSlashPermissionsPresetFromPicker,
+  implementPlanFromPrompt,
+  continuePlanModeFromPrompt,
+  cancelPlanImplementationPrompt,
   loadConfig,
   respondToToolUserInput,
   cancelToolUserInputRequest,
@@ -269,6 +274,8 @@ onMounted(() => {
         :slash-suggestions-open="slashSuggestionsOpen"
         :slash-suggestions="slashSuggestions"
         :active-slash-suggestion-index="activeSlashSuggestionIndex"
+        :plan-implementation-prompt-open="planImplementationPromptOpen"
+        :plan-implementation-starting="isPlanImplementationStarting"
         @update:model-value="messageInput = $event"
         @update:selected-model-id="setSelectedModelId"
         @update:selected-thinking-effort="setSelectedThinkingEffort"
@@ -279,6 +286,9 @@ onMounted(() => {
         @slash-commit-selection="commitActiveSlashSuggestion"
         @slash-close-suggestions="closeSlashSuggestions"
         @slash-select-suggestion="selectSlashSuggestionById"
+        @implement-plan="implementPlanFromPrompt"
+        @continue-plan-mode="continuePlanModeFromPrompt"
+        @cancel-plan-implementation-prompt="cancelPlanImplementationPrompt"
         @send="sendTurn"
         @interrupt="interruptTurn"
       />

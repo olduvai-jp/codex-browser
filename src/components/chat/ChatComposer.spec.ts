@@ -31,6 +31,8 @@ function mountComposer(overrides: Partial<{
   slashSuggestionsOpen: boolean
   slashSuggestions: SlashSuggestionItem[]
   activeSlashSuggestionIndex: number
+  planImplementationPromptOpen: boolean
+  planImplementationStarting: boolean
 }> = {}) {
   return mount(ChatComposer, {
     props: {
@@ -63,6 +65,8 @@ function mountComposer(overrides: Partial<{
       slashSuggestionsOpen: false,
       slashSuggestions: [],
       activeSlashSuggestionIndex: -1,
+      planImplementationPromptOpen: false,
+      planImplementationStarting: false,
       ...overrides,
     },
   })
@@ -196,6 +200,71 @@ describe('ChatComposer', () => {
     await wrapper.get('[data-testid="slash-suggestion-option-0"]').trigger('click')
 
     expect(wrapper.emitted('slashSelectSuggestion')).toEqual([['model:gpt-4o-mini']])
+  })
+
+  it('renders plan implementation prompt above composer', () => {
+    const wrapper = mountComposer({
+      planImplementationPromptOpen: true,
+    })
+
+    expect(wrapper.get('[data-testid="plan-implementation-prompt"]').text()).toContain('Implement this plan?')
+    expect(wrapper.get('[data-testid="plan-implementation-yes"]').text()).toBe('Yes')
+    expect(wrapper.get('[data-testid="plan-implementation-no"]').text()).toBe('No')
+    expect(wrapper.get('[data-testid="plan-implementation-cancel"]').text()).toBe('x')
+    expect(wrapper.get('[data-testid="plan-implementation-cancel"]').attributes('aria-label')).toBe('Cancel')
+  })
+
+  it('emits implement/continue/cancel actions from plan implementation prompt', async () => {
+    const wrapper = mountComposer({
+      planImplementationPromptOpen: true,
+    })
+
+    await wrapper.get('[data-testid="plan-implementation-yes"]').trigger('click')
+    await wrapper.get('[data-testid="plan-implementation-no"]').trigger('click')
+    await wrapper.get('[data-testid="plan-implementation-cancel"]').trigger('click')
+
+    expect(wrapper.emitted('implementPlan')).toHaveLength(1)
+    expect(wrapper.emitted('continuePlanMode')).toHaveLength(1)
+    expect(wrapper.emitted('cancelPlanImplementationPrompt')).toHaveLength(1)
+  })
+
+  it('emits cancel on Escape when plan implementation prompt is open', async () => {
+    const wrapper = mountComposer({
+      planImplementationPromptOpen: true,
+      slashSuggestionsOpen: true,
+      slashSuggestions: [
+        {
+          id: 'command:status',
+          kind: 'command',
+          label: '/status',
+          insertText: '/status ',
+        },
+      ],
+    })
+
+    await wrapper.get('textarea').trigger('keydown', { key: 'Escape' })
+
+    expect(wrapper.emitted('cancelPlanImplementationPrompt')).toHaveLength(1)
+    expect(wrapper.emitted('slashCloseSuggestions')).toBeUndefined()
+  })
+
+  it('hides slash suggestions while plan implementation prompt is open', () => {
+    const wrapper = mountComposer({
+      planImplementationPromptOpen: true,
+      slashSuggestionsOpen: true,
+      slashSuggestions: [
+        {
+          id: 'command:model',
+          kind: 'command',
+          label: '/model',
+          insertText: '/model ',
+        },
+      ],
+      activeSlashSuggestionIndex: 0,
+    })
+
+    expect(wrapper.find('[data-testid="plan-implementation-prompt"]').exists()).toBe(true)
+    expect(wrapper.find('[data-testid="slash-suggestions"]').exists()).toBe(false)
   })
 
   it('emits model and thinking updates from select controls', async () => {

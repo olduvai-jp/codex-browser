@@ -119,7 +119,12 @@ describe('useBridgeClient connect', () => {
         return { userAgent: 'mock-codex-agent' }
       }
       if (method === 'collaborationMode/list') {
-        return { data: [] }
+        return {
+          data: [
+            { name: 'Default', mode: 'default', model: 'gpt-4o-mini', reasoning_effort: 'medium' },
+            { name: 'Plan', mode: 'plan', model: 'o3-mini', reasoning_effort: 'high' },
+          ],
+        }
       }
       if (method === 'model/list') {
         return { models: [] }
@@ -2717,6 +2722,510 @@ describe('useBridgeClient collaboration mode and plan timeline', () => {
     const failedTurnItem = vm.timelineItems.find((entry) => entry.kind === 'turnStatus' && entry.status === 'failed')
     expect(failedTurnItem?.label).toContain('Plan mode failed while strengthening logs')
     expect(failedTurnItem?.label).toContain('model returned an invalid tool request')
+
+    wrapper.unmount()
+  })
+})
+
+describe('useBridgeClient plan implementation prompt', () => {
+  beforeEach(() => {
+    bridgeMock.reset()
+  })
+
+  it('opens prompt when a live plan turn completes with a completed plan item', async () => {
+    let turnStartCount = 0
+    bridgeMock.setRequestHandler(async (method) => {
+      if (method === 'initialize') {
+        return { userAgent: 'mock-codex-agent' }
+      }
+      if (method === 'collaborationMode/list') {
+        return {
+          data: [
+            { name: 'Default', mode: 'default', model: 'gpt-4o-mini', reasoning_effort: 'medium' },
+            { name: 'Plan', mode: 'plan', model: 'o3-mini', reasoning_effort: 'high' },
+          ],
+        }
+      }
+      if (method === 'model/list') {
+        return { models: [] }
+      }
+      if (method === 'thread/start') {
+        return { thread: { id: 'thread-plan-prompt-open-1' } }
+      }
+      if (method === 'turn/start') {
+        turnStartCount += 1
+        return { turn: { id: `turn-plan-prompt-open-${turnStartCount}` } }
+      }
+      throw new Error(`Unexpected method: ${method}`)
+    })
+
+    const wrapper = mount(HostComponent)
+    const vm = wrapper.vm as unknown as {
+      connect: () => Promise<void>
+      startThread: () => Promise<void>
+      setSelectedCollaborationMode: (value: string) => void
+      sendTurn: () => Promise<void>
+      messageInput: string
+      planImplementationPromptOpen: boolean
+    }
+
+    await vm.connect()
+    await flushPromises()
+    await vm.startThread()
+    await flushPromises()
+    vm.setSelectedCollaborationMode('plan')
+    vm.messageInput = 'draft plan'
+    await vm.sendTurn()
+    await flushPromises()
+
+    getClientInstance().emitMessage({
+      method: 'item/completed',
+      params: {
+        turnId: 'turn-plan-prompt-open-1',
+        item: {
+          id: 'item-plan-prompt-open-1',
+          type: 'plan',
+        },
+      },
+    })
+    getClientInstance().emitMessage({
+      method: 'turn/completed',
+      params: {
+        turn: {
+          id: 'turn-plan-prompt-open-1',
+          status: 'completed',
+        },
+      },
+    })
+    await flushPromises()
+
+    expect(vm.planImplementationPromptOpen).toBe(true)
+
+    wrapper.unmount()
+  })
+
+  it('does not open prompt when completed turn status is failed or interrupted', async () => {
+    let turnStartCount = 0
+    bridgeMock.setRequestHandler(async (method) => {
+      if (method === 'initialize') {
+        return { userAgent: 'mock-codex-agent' }
+      }
+      if (method === 'collaborationMode/list') {
+        return {
+          data: [
+            { name: 'Default', mode: 'default', model: 'gpt-4o-mini', reasoning_effort: 'medium' },
+            { name: 'Plan', mode: 'plan', model: 'o3-mini', reasoning_effort: 'high' },
+          ],
+        }
+      }
+      if (method === 'model/list') {
+        return { models: [] }
+      }
+      if (method === 'thread/start') {
+        return { thread: { id: 'thread-plan-prompt-status-1' } }
+      }
+      if (method === 'turn/start') {
+        turnStartCount += 1
+        return { turn: { id: `turn-plan-prompt-status-${turnStartCount}` } }
+      }
+      throw new Error(`Unexpected method: ${method}`)
+    })
+
+    const wrapper = mount(HostComponent)
+    const vm = wrapper.vm as unknown as {
+      connect: () => Promise<void>
+      startThread: () => Promise<void>
+      setSelectedCollaborationMode: (value: string) => void
+      sendTurn: () => Promise<void>
+      continuePlanModeFromPrompt: () => void
+      messageInput: string
+      planImplementationPromptOpen: boolean
+    }
+
+    await vm.connect()
+    await flushPromises()
+    await vm.startThread()
+    await flushPromises()
+    vm.setSelectedCollaborationMode('plan')
+
+    vm.messageInput = 'failed plan turn'
+    await vm.sendTurn()
+    await flushPromises()
+    getClientInstance().emitMessage({
+      method: 'item/completed',
+      params: {
+        turnId: 'turn-plan-prompt-status-1',
+        item: {
+          id: 'item-plan-prompt-status-1',
+          type: 'plan',
+        },
+      },
+    })
+    getClientInstance().emitMessage({
+      method: 'turn/completed',
+      params: {
+        turn: {
+          id: 'turn-plan-prompt-status-1',
+          status: 'failed',
+        },
+      },
+    })
+    await flushPromises()
+    expect(vm.planImplementationPromptOpen).toBe(false)
+
+    vm.continuePlanModeFromPrompt()
+    vm.messageInput = 'interrupted plan turn'
+    await vm.sendTurn()
+    await flushPromises()
+    getClientInstance().emitMessage({
+      method: 'item/completed',
+      params: {
+        turnId: 'turn-plan-prompt-status-2',
+        item: {
+          id: 'item-plan-prompt-status-2',
+          type: 'plan',
+        },
+      },
+    })
+    getClientInstance().emitMessage({
+      method: 'turn/completed',
+      params: {
+        turn: {
+          id: 'turn-plan-prompt-status-2',
+          status: 'interrupted',
+        },
+      },
+    })
+    await flushPromises()
+    expect(vm.planImplementationPromptOpen).toBe(false)
+
+    wrapper.unmount()
+  })
+
+  it('defers prompt while approval/tool input is pending and opens after queues resolve', async () => {
+    let turnStartCount = 0
+    bridgeMock.setRequestHandler(async (method) => {
+      if (method === 'initialize') {
+        return { userAgent: 'mock-codex-agent' }
+      }
+      if (method === 'collaborationMode/list') {
+        return {
+          data: [
+            { name: 'Default', mode: 'default', model: 'gpt-4o-mini', reasoning_effort: 'medium' },
+            { name: 'Plan', mode: 'plan', model: 'o3-mini', reasoning_effort: 'high' },
+          ],
+        }
+      }
+      if (method === 'model/list') {
+        return { models: [] }
+      }
+      if (method === 'thread/start') {
+        return { thread: { id: 'thread-plan-prompt-pending-1' } }
+      }
+      if (method === 'turn/start') {
+        turnStartCount += 1
+        return { turn: { id: `turn-plan-prompt-pending-${turnStartCount}` } }
+      }
+      throw new Error(`Unexpected method: ${method}`)
+    })
+
+    const wrapper = mount(HostComponent)
+    const vm = wrapper.vm as unknown as {
+      connect: () => Promise<void>
+      startThread: () => Promise<void>
+      setSelectedCollaborationMode: (value: string) => void
+      sendTurn: () => Promise<void>
+      continuePlanModeFromPrompt: () => void
+      respondToApproval: (decision: 'approve' | 'decline' | 'cancel') => void
+      cancelToolUserInputRequest: () => void
+      messageInput: string
+      planImplementationPromptOpen: boolean
+    }
+
+    await vm.connect()
+    await flushPromises()
+    await vm.startThread()
+    await flushPromises()
+    vm.setSelectedCollaborationMode('plan')
+
+    vm.messageInput = 'plan with approval pending'
+    await vm.sendTurn()
+    await flushPromises()
+    getClientInstance().emitMessage({
+      id: 'approval-plan-prompt-1',
+      method: 'item/commandExecution/requestApproval',
+      params: {
+        command: 'echo pending approval',
+      },
+    })
+    getClientInstance().emitMessage({
+      method: 'item/completed',
+      params: {
+        turnId: 'turn-plan-prompt-pending-1',
+        item: {
+          id: 'item-plan-prompt-pending-1',
+          type: 'plan',
+        },
+      },
+    })
+    getClientInstance().emitMessage({
+      method: 'turn/completed',
+      params: {
+        turn: {
+          id: 'turn-plan-prompt-pending-1',
+          status: 'completed',
+        },
+      },
+    })
+    await flushPromises()
+
+    expect(vm.planImplementationPromptOpen).toBe(false)
+
+    vm.respondToApproval('approve')
+    await flushPromises()
+    expect(vm.planImplementationPromptOpen).toBe(true)
+
+    vm.continuePlanModeFromPrompt()
+    vm.messageInput = 'plan with tool input pending'
+    await vm.sendTurn()
+    await flushPromises()
+    getClientInstance().emitMessage({
+      id: 'tool-input-plan-prompt-1',
+      method: 'item/tool/requestUserInput',
+      params: {
+        turnId: 'turn-plan-prompt-pending-2',
+        callId: 'call-plan-prompt-pending-2',
+        tool: 'pending_tool',
+        questions: [
+          {
+            id: 'q_pending',
+            label: 'Pending question',
+          },
+        ],
+      },
+    })
+    getClientInstance().emitMessage({
+      method: 'item/completed',
+      params: {
+        turnId: 'turn-plan-prompt-pending-2',
+        item: {
+          id: 'item-plan-prompt-pending-2',
+          type: 'plan',
+        },
+      },
+    })
+    getClientInstance().emitMessage({
+      method: 'turn/completed',
+      params: {
+        turn: {
+          id: 'turn-plan-prompt-pending-2',
+          status: 'completed',
+        },
+      },
+    })
+    await flushPromises()
+
+    expect(vm.planImplementationPromptOpen).toBe(false)
+
+    vm.cancelToolUserInputRequest()
+    await flushPromises()
+    expect(vm.planImplementationPromptOpen).toBe(true)
+
+    wrapper.unmount()
+  })
+
+  it('does not open prompt for read/resume-hydrated plan turns', async () => {
+    bridgeMock.setRequestHandler(async (method, params) => {
+      if (method === 'initialize') {
+        return { userAgent: 'mock-codex-agent' }
+      }
+      if (method === 'collaborationMode/list') {
+        return {
+          data: [
+            { name: 'Default', mode: 'default', model: 'gpt-4o-mini', reasoning_effort: 'medium' },
+            { name: 'Plan', mode: 'plan', model: 'o3-mini', reasoning_effort: 'high' },
+          ],
+        }
+      }
+      if (method === 'model/list') {
+        return { models: [] }
+      }
+      if (method === 'thread/read') {
+        return {
+          thread: {
+            id: 'thread-read-plan-prompt-1',
+            turns: [
+              {
+                id: 'turn-read-plan-prompt-1',
+                items: [
+                  {
+                    id: 'item-read-plan-prompt-1',
+                    type: 'plan',
+                    text: 'hydrated read plan item',
+                  },
+                ],
+              },
+            ],
+          },
+        }
+      }
+      if (method === 'thread/resume') {
+        const request = params as { threadId?: string }
+        return {
+          thread: {
+            id: request.threadId ?? 'thread-resume-plan-prompt-1',
+            turns: [
+              {
+                id: 'turn-resume-plan-prompt-1',
+                items: [
+                  {
+                    id: 'item-resume-plan-prompt-1',
+                    type: 'plan',
+                    text: 'hydrated resume plan item',
+                  },
+                ],
+              },
+            ],
+          },
+        }
+      }
+      throw new Error(`Unexpected method: ${method}`)
+    })
+
+    const wrapper = mount(HostComponent)
+    const vm = wrapper.vm as unknown as {
+      connect: () => Promise<void>
+      readThread: (threadId?: string) => Promise<void>
+      resumeThread: (threadId?: string) => Promise<void>
+      planImplementationPromptOpen: boolean
+    }
+
+    await vm.connect()
+    await flushPromises()
+
+    await vm.readThread('thread-read-plan-prompt-1')
+    await flushPromises()
+    expect(vm.planImplementationPromptOpen).toBe(false)
+
+    getClientInstance().emitMessage({
+      method: 'item/completed',
+      params: {
+        turnId: 'turn-read-plan-prompt-1',
+        item: {
+          id: 'item-read-plan-prompt-1',
+          type: 'plan',
+        },
+      },
+    })
+    getClientInstance().emitMessage({
+      method: 'turn/completed',
+      params: {
+        turn: {
+          id: 'turn-read-plan-prompt-1',
+          status: 'completed',
+        },
+      },
+    })
+    await flushPromises()
+    expect(vm.planImplementationPromptOpen).toBe(false)
+
+    await vm.resumeThread('thread-resume-plan-prompt-1')
+    await flushPromises()
+    expect(vm.planImplementationPromptOpen).toBe(false)
+
+    wrapper.unmount()
+  })
+
+  it('starts implementation turn in default mode with fixed prompt text', async () => {
+    let turnStartCount = 0
+    bridgeMock.setRequestHandler(async (method) => {
+      if (method === 'initialize') {
+        return { userAgent: 'mock-codex-agent' }
+      }
+      if (method === 'collaborationMode/list') {
+        return {
+          data: [
+            { name: 'Default', mode: 'default', model: 'gpt-4o-mini', reasoning_effort: 'medium' },
+            { name: 'Plan', mode: 'plan', model: 'o3-mini', reasoning_effort: 'high' },
+          ],
+        }
+      }
+      if (method === 'model/list') {
+        return { models: [] }
+      }
+      if (method === 'thread/start') {
+        return { thread: { id: 'thread-plan-prompt-implement-1' } }
+      }
+      if (method === 'turn/start') {
+        turnStartCount += 1
+        return { turn: { id: `turn-plan-prompt-implement-${turnStartCount}` } }
+      }
+      throw new Error(`Unexpected method: ${method}`)
+    })
+
+    const wrapper = mount(HostComponent)
+    const vm = wrapper.vm as unknown as {
+      connect: () => Promise<void>
+      startThread: () => Promise<void>
+      setSelectedCollaborationMode: (value: string) => void
+      sendTurn: () => Promise<void>
+      implementPlanFromPrompt: () => Promise<void>
+      messageInput: string
+      selectedCollaborationMode: string
+      planImplementationPromptOpen: boolean
+    }
+
+    await vm.connect()
+    await flushPromises()
+    await vm.startThread()
+    await flushPromises()
+
+    vm.setSelectedCollaborationMode('plan')
+    vm.messageInput = 'plan first'
+    await vm.sendTurn()
+    await flushPromises()
+
+    getClientInstance().emitMessage({
+      method: 'item/completed',
+      params: {
+        turnId: 'turn-plan-prompt-implement-1',
+        item: {
+          id: 'item-plan-prompt-implement-1',
+          type: 'plan',
+        },
+      },
+    })
+    getClientInstance().emitMessage({
+      method: 'turn/completed',
+      params: {
+        turn: {
+          id: 'turn-plan-prompt-implement-1',
+          status: 'completed',
+        },
+      },
+    })
+    await flushPromises()
+    expect(vm.planImplementationPromptOpen).toBe(true)
+
+    await vm.implementPlanFromPrompt()
+    await flushPromises()
+
+    const turnStartCalls = bridgeMock.getRequestCalls().filter((call) => call.method === 'turn/start')
+    expect(turnStartCalls).toHaveLength(2)
+    expect(turnStartCalls[1]?.params).toMatchObject({
+      threadId: 'thread-plan-prompt-implement-1',
+      input: [
+        {
+          type: 'text',
+          text: 'Implement the plan.',
+          text_elements: [],
+        },
+      ],
+      collaborationMode: {
+        mode: 'default',
+      },
+    })
+    expect(vm.selectedCollaborationMode).toBe('default')
 
     wrapper.unmount()
   })

@@ -182,6 +182,43 @@ function getTimelineMessageTexts(wrapper: VueWrapper<ComponentPublicInstance>): 
     .map((entry) => entry.text())
 }
 
+async function preparePlanImplementationPrompt(
+  wrapper: VueWrapper<ComponentPublicInstance>,
+  turnId = 'turn-plan-choice-1',
+): Promise<InstanceType<typeof bridgeMock.MockBridgeRpcClient>> {
+  const client = getClientInstance()
+  await openAdvancedPanel(wrapper)
+  await getByTestId(wrapper, 'start-thread-button').trigger('click')
+  await flushPromises()
+  await getByTestId(wrapper, 'collaboration-mode-select').setValue('plan')
+  await wrapper.get('textarea').setValue('Draft plan response')
+  await wrapper.get('form').trigger('submit')
+  await flushPromises()
+
+  client.emitMessage({
+    method: 'item/completed',
+    params: {
+      turnId,
+      item: {
+        id: `item-${turnId}`,
+        type: 'plan',
+      },
+    },
+  })
+  client.emitMessage({
+    method: 'turn/completed',
+    params: {
+      turn: {
+        id: turnId,
+        status: 'completed',
+      },
+    },
+  })
+  await flushPromises()
+
+  return client
+}
+
 describe('App.vue ui phase-1 flows', () => {
   beforeEach(() => {
     bridgeMock.reset()
@@ -2316,6 +2353,172 @@ describe('App.vue ui phase-1 flows', () => {
     expect((wrapper.get('select[data-testid="collaboration-mode-select"]').element as HTMLSelectElement).value).toBe(
       'default',
     )
+
+    wrapper.unmount()
+  })
+
+  it('shows implementation choice prompt after completed plan turn and starts default implementation on Yes', async () => {
+    let threadStartCount = 0
+    let turnStartCount = 0
+    bridgeMock.setRequestHandler(async (method) => {
+      if (method === 'initialize') {
+        return { userAgent: 'mock-codex-agent' }
+      }
+      if (method === 'collaborationMode/list') {
+        return {
+          data: [
+            { name: 'Default', mode: 'default', model: 'gpt-4o-mini', reasoning_effort: 'medium' },
+            { name: 'Plan', mode: 'plan', model: 'o3-mini', reasoning_effort: 'high' },
+          ],
+        }
+      }
+      if (method === 'model/list') {
+        return { models: [] }
+      }
+      if (method === 'thread/start') {
+        threadStartCount += 1
+        return { thread: { id: `thread-plan-choice-${threadStartCount}` } }
+      }
+      if (method === 'turn/start') {
+        turnStartCount += 1
+        return { turn: { id: `turn-plan-choice-${turnStartCount}` } }
+      }
+      throw new Error(`Unexpected method: ${method}`)
+    })
+
+    const wrapper = mount(App)
+    await connectAndInitialize(wrapper)
+    await preparePlanImplementationPrompt(wrapper, 'turn-plan-choice-1')
+
+    expect(getByTestId(wrapper, 'plan-implementation-prompt').exists()).toBe(true)
+
+    await getByTestId(wrapper, 'plan-implementation-yes').trigger('click')
+    await flushPromises()
+
+    const turnStartCalls = bridgeMock.getRequestCalls().filter((call) => call.method === 'turn/start')
+    expect(turnStartCalls).toHaveLength(2)
+    const firstTurnThreadId = (turnStartCalls[0]?.params as { threadId?: string } | undefined)?.threadId
+    expect(firstTurnThreadId).toBeTruthy()
+    expect(turnStartCalls[1]?.params).toMatchObject({
+      threadId: firstTurnThreadId,
+      input: [
+        {
+          type: 'text',
+          text: 'Implement the plan.',
+          text_elements: [],
+        },
+      ],
+      collaborationMode: {
+        mode: 'default',
+      },
+    })
+    expect((wrapper.get('select[data-testid="collaboration-mode-select"]').element as HTMLSelectElement).value).toBe(
+      'default',
+    )
+
+    wrapper.unmount()
+  })
+
+  it('closes implementation choice prompt on No and keeps plan mode/text intact', async () => {
+    let threadStartCount = 0
+    let turnStartCount = 0
+    bridgeMock.setRequestHandler(async (method) => {
+      if (method === 'initialize') {
+        return { userAgent: 'mock-codex-agent' }
+      }
+      if (method === 'collaborationMode/list') {
+        return {
+          data: [
+            { name: 'Default', mode: 'default', model: 'gpt-4o-mini', reasoning_effort: 'medium' },
+            { name: 'Plan', mode: 'plan', model: 'o3-mini', reasoning_effort: 'high' },
+          ],
+        }
+      }
+      if (method === 'model/list') {
+        return { models: [] }
+      }
+      if (method === 'thread/start') {
+        threadStartCount += 1
+        return { thread: { id: `thread-plan-choice-no-${threadStartCount}` } }
+      }
+      if (method === 'turn/start') {
+        turnStartCount += 1
+        return { turn: { id: `turn-plan-choice-no-${turnStartCount}` } }
+      }
+      throw new Error(`Unexpected method: ${method}`)
+    })
+
+    const wrapper = mount(App)
+    await connectAndInitialize(wrapper)
+    await preparePlanImplementationPrompt(wrapper, 'turn-plan-choice-no-1')
+    await wrapper.get('textarea').setValue('keep this text')
+
+    await getByTestId(wrapper, 'plan-implementation-no').trigger('click')
+    await flushPromises()
+
+    expect(wrapper.find('[data-testid="plan-implementation-prompt"]').exists()).toBe(false)
+    expect((wrapper.get('textarea').element as HTMLTextAreaElement).value).toBe('keep this text')
+    expect((wrapper.get('select[data-testid="collaboration-mode-select"]').element as HTMLSelectElement).value).toBe(
+      'plan',
+    )
+    expect(bridgeMock.getRequestCalls().filter((call) => call.method === 'turn/start')).toHaveLength(1)
+
+    wrapper.unmount()
+  })
+
+  it('closes implementation choice prompt on Cancel and Escape without sending', async () => {
+    let threadStartCount = 0
+    let turnStartCount = 0
+    bridgeMock.setRequestHandler(async (method) => {
+      if (method === 'initialize') {
+        return { userAgent: 'mock-codex-agent' }
+      }
+      if (method === 'collaborationMode/list') {
+        return {
+          data: [
+            { name: 'Default', mode: 'default', model: 'gpt-4o-mini', reasoning_effort: 'medium' },
+            { name: 'Plan', mode: 'plan', model: 'o3-mini', reasoning_effort: 'high' },
+          ],
+        }
+      }
+      if (method === 'model/list') {
+        return { models: [] }
+      }
+      if (method === 'thread/start') {
+        threadStartCount += 1
+        return { thread: { id: `thread-plan-choice-cancel-${threadStartCount}` } }
+      }
+      if (method === 'turn/start') {
+        turnStartCount += 1
+        return { turn: { id: `turn-plan-choice-cancel-${turnStartCount}` } }
+      }
+      throw new Error(`Unexpected method: ${method}`)
+    })
+
+    const wrapper = mount(App)
+    await connectAndInitialize(wrapper)
+    await preparePlanImplementationPrompt(wrapper, 'turn-plan-choice-cancel-1')
+    await wrapper.get('textarea').setValue('cancel keeps text')
+
+    await getByTestId(wrapper, 'plan-implementation-cancel').trigger('click')
+    await flushPromises()
+    expect(wrapper.find('[data-testid="plan-implementation-prompt"]').exists()).toBe(false)
+    expect((wrapper.get('textarea').element as HTMLTextAreaElement).value).toBe('cancel keeps text')
+    expect((wrapper.get('select[data-testid="collaboration-mode-select"]').element as HTMLSelectElement).value).toBe(
+      'plan',
+    )
+
+    await preparePlanImplementationPrompt(wrapper, 'turn-plan-choice-cancel-2')
+    await wrapper.get('textarea').setValue('escape keeps text')
+    await wrapper.get('textarea').trigger('keydown', { key: 'Escape' })
+    await flushPromises()
+
+    expect(wrapper.find('[data-testid="plan-implementation-prompt"]').exists()).toBe(false)
+    expect((wrapper.get('textarea').element as HTMLTextAreaElement).value).toBe('escape keeps text')
+    expect((wrapper.get('select[data-testid="collaboration-mode-select"]').element as HTMLSelectElement).value).toBe(
+      'plan',
+    )
+    expect(bridgeMock.getRequestCalls().filter((call) => call.method === 'turn/start')).toHaveLength(2)
 
     wrapper.unmount()
   })
